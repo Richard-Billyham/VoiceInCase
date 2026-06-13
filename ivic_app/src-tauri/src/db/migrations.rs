@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS invoice (
   purchase_date TEXT NOT NULL DEFAULT '',
   content_type TEXT NOT NULL DEFAULT '发票',
   item_name TEXT NOT NULL,
+  invoice_item_name TEXT NOT NULL DEFAULT '',
   spec_model TEXT NOT NULL DEFAULT '',
   unit TEXT NOT NULL DEFAULT '',
   quantity REAL,
@@ -343,6 +344,15 @@ fn ensure_invoice_import_fields(conn: &Connection) -> AppResult<()> {
     if !has_invoice_confirmed {
         conn.execute(
             "ALTER TABLE invoice ADD COLUMN invoice_confirmed INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    let has_invoice_item_name = conn
+        .prepare("SELECT invoice_item_name FROM invoice LIMIT 1")
+        .is_ok();
+    if !has_invoice_item_name {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN invoice_item_name TEXT NOT NULL DEFAULT ''",
             [],
         )?;
     }

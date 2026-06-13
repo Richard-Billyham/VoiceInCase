@@ -438,6 +438,7 @@ export function ImportDialogs({
       itemId: item.id,
       recognizing: false,
       title: detail.itemName || parseTitle(invoiceTextValue, item.file.name),
+      invoiceItemName: detail.itemName,
       invoiceNumber: detail.invoiceNumber || `IV${Date.now()}${index}`,
       amount,
       taxAmount: Number(detail.taxAmount) || 0,

@@ -512,6 +512,7 @@ function MatchMode({
       sellerTaxNo: invoice.sellerTaxNo || order.sellerTaxNo,
       buyerName: invoice.buyerName || order.buyerName,
       buyerTaxNo: invoice.buyerTaxNo || order.buyerTaxNo,
+      invoiceItemName: invoice.invoiceItemName || order.invoiceItemName,
       invoiceRemark: invoice.invoiceRemark || order.invoiceRemark,
       itemSpecModel: invoice.itemSpecModel || order.itemSpecModel,
       itemUnit: invoice.itemUnit || order.itemUnit,

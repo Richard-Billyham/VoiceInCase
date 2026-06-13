@@ -24,6 +24,7 @@ export type QuickSubmitItemFieldKey =
   | "reconciledAmount"
   | "pendingAmount"
   | "formId"
+  | "invoiceIssueDate"
   | "invoiceNumber"
   | "invoiceKind"
   | "buyerName"
@@ -87,6 +88,7 @@ export const quickSubmitItemFieldOptions: Array<{ key: QuickSubmitItemFieldKey; 
   { key: "reconciledAmount", name: "已到账金额", defaultLabel: "已到账", defaultEnabled: false },
   { key: "pendingAmount", name: "待到账金额", defaultLabel: "待到账", defaultEnabled: false },
   { key: "formId", name: "订单 ID", defaultLabel: "订单ID", defaultEnabled: false },
+  { key: "invoiceIssueDate", name: "发票日期", defaultLabel: "发票日期", defaultEnabled: false },
   { key: "invoiceNumber", name: "票号", defaultLabel: "票号", defaultEnabled: false },
   { key: "invoiceKind", name: "发票类型", defaultLabel: "发票类型", defaultEnabled: false },
   { key: "buyerName", name: "购买方名称", defaultLabel: "购买方", defaultEnabled: false },
@@ -369,14 +371,16 @@ function buildItemValueMap(item: ReimbursementBatch["items"][number], form: Form
   const taxAmount = form?.taxAmount ?? 0;
   const amountWithoutTax = Math.max(0, invoiceTotalAmount - taxAmount);
   const quantity = form?.itemQuantity === null || typeof form?.itemQuantity === "undefined" ? "" : String(form.itemQuantity);
+  const invoiceItemName = form?.invoiceItemName || form?.title || item.title;
   return new Map<QuickSubmitItemFieldKey | string, string>([
-    ["itemTitle", form?.title || item.title],
+    ["itemTitle", invoiceItemName],
     ["itemAmount", formatMoney(item.amount, hidden)],
     ["itemStatus", item.status],
     ["itemRemark", item.remark || ""],
     ["reconciledAmount", formatMoney(item.reconciledAmount, hidden)],
     ["pendingAmount", formatMoney(Math.max(0, item.amount - item.reconciledAmount), hidden)],
     ["formId", String(item.formId)],
+    ["invoiceIssueDate", form?.issueDate || ""],
     ["invoiceNumber", form?.invoiceNumber || ""],
     ["invoiceKind", form?.invoiceKind || ""],
     ["buyerName", form?.buyerName || ""],
@@ -398,6 +402,7 @@ function buildItemValueMap(item: ReimbursementBatch["items"][number], form: Form
     ["已到账金额", formatMoney(item.reconciledAmount, hidden)],
     ["待到账金额", formatMoney(Math.max(0, item.amount - item.reconciledAmount), hidden)],
     ["订单ID", String(item.formId)],
+    ["发票日期", form?.issueDate || ""],
     ["票号", form?.invoiceNumber || ""],
     ["发票类型", form?.invoiceKind || ""],
     ["购买方名称", form?.buyerName || ""],
@@ -408,7 +413,7 @@ function buildItemValueMap(item: ReimbursementBatch["items"][number], form: Form
     ["合计", formatMoney(amountWithoutTax, hidden)],
     ["税额", formatMoney(taxAmount, hidden)],
     ["发票备注", form?.invoiceRemark || ""],
-    ["首个项目名称", form?.title || item.title],
+    ["首个项目名称", invoiceItemName],
     ["规格型号", form?.itemSpecModel || ""],
     ["单位", form?.itemUnit || ""],
     ["数量", quantity],

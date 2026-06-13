@@ -69,6 +69,7 @@ export interface FormRecord {
   sellerTaxNo?: string;
   buyerName: string;
   buyerTaxNo?: string;
+  invoiceItemName?: string;
   invoiceRemark?: string;
   itemSpecModel?: string;
   itemUnit?: string;

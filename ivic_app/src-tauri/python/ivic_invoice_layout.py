@@ -1,8 +1,8 @@
 """Layout-assisted invoice parsing for IVIC.
 
-This module lives in the new Tauri app so the legacy invoice_manager OCR code
-can stay untouched. It uses embedded PDF text coordinates first, then falls
-back to conservative regex extraction.
+This module lives in the Tauri app alongside the IVIC OCR service. It uses
+embedded PDF text coordinates first, then falls back to conservative regex
+extraction.
 """
 
 from __future__ import annotations

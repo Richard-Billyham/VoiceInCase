@@ -73,7 +73,7 @@ fn load_forms(conn: &rusqlite::Connection) -> AppResult<Vec<FormRecord>> {
         "SELECT i.invoice_id, i.item_name, i.invoice_number, i.invoice_kind, i.amount, i.tax_amount, i.purchase_date, i.issue_date, i.content_type,
                 i.group_id, COALESCE(g.group_name, ''), i.status,
                 i.seller_name, i.seller_tax_no, i.buyer_name, i.buyer_tax_no, i.raw_text, i.description,
-                i.spec_model, i.unit, i.quantity, i.invoice_confirmed, i.updated_at,
+                i.spec_model, i.unit, i.quantity, COALESCE(NULLIF(i.invoice_item_name, ''), i.item_name), i.invoice_confirmed, i.updated_at,
                 COUNT(a.attachment_id)
          FROM invoice i
          LEFT JOIN expense_group g ON g.group_id = i.group_id
@@ -82,7 +82,7 @@ fn load_forms(conn: &rusqlite::Connection) -> AppResult<Vec<FormRecord>> {
          ORDER BY i.issue_date DESC, i.invoice_id DESC",
     )?;
     let rows = stmt.query_map([], |row| {
-        let attachment_count: i64 = row.get(23)?;
+        let attachment_count: i64 = row.get(24)?;
         Ok(FormRecord {
             id: row.get(0)?,
             title: row.get(1)?,
@@ -98,18 +98,19 @@ fn load_forms(conn: &rusqlite::Connection) -> AppResult<Vec<FormRecord>> {
             status: row.get(11)?,
             has_invoice: attachment_count > 0,
             is_matched: false,
-            invoice_confirmed: row.get::<_, i64>(21)? == 1,
+            invoice_confirmed: row.get::<_, i64>(22)? == 1,
             attachment_count,
             seller_name: row.get(12)?,
             seller_tax_no: row.get(13)?,
             buyer_name: row.get(14)?,
             buyer_tax_no: row.get(15)?,
+            invoice_item_name: row.get(21)?,
             invoice_remark: row.get(16)?,
             remark: row.get(17)?,
             item_spec_model: row.get(18)?,
             item_unit: row.get(19)?,
             item_quantity: row.get(20)?,
-            updated_at: row.get(22)?,
+            updated_at: row.get(23)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)

@@ -1,3 +1,46 @@
+# IVIC OCR 重构方案
+
+## Summary
+
+将现有 OCR 能力从旧 `invoice_manager` / PyQt 生态中剥离，重构为 IVIC 自己的轻量 OCR runtime，并保持当前识别功能和前端字段输出不变。新方案要支持 release 安装包内置 OCR 资源，避免继续依赖开发机上的旧项目目录和大体积 PyQt 环境。
+
+`ivic_app/ocr_lab` 作为 OCR 重构的 testbench 使用：后续实现过程中可以直接拿这里的样本文件做自测、记录日志、分析失败样本，直到重构结果稳定可用。
+
+## Key Changes
+
+- 新增 IVIC 专属 OCR 服务模块，放到 `ivic_app/src-tauri/python/ivic_ocr/`，把旧 OCR 逻辑从 `invoice_manager/extensions/ocr_service.py` 迁移过来，但保持对外接口和返回字段一致。
+- Rust 侧不再硬编码寻找 `invoice_manager/extensions/ocr_service.py`，而是优先加载 Tauri bundle 的 `resources/ocr`，开发环境才回退到本地源码目录。
+- release 打包时只携带 OCR 所需最小 runtime：Python、PyMuPDF、Pillow、pytesseract、Tesseract 和中文语言包，明确不再打包 PyQt6、PyMySQL、openpyxl、完整旧 `.venv`。
+- 新增 OCR runtime 准备脚本，负责把 runtime、OCR 服务代码和 Tesseract 资源 staging 到 `src-tauri/resources/ocr/`，再由 Tauri 打进安装包。
+- 保留 `ivic_invoice_layout.py` 作为 PDF layout 辅助解析模块，功能上继续用于补强发票字段识别。
+- 更新文档，说明 release 前如何准备 OCR runtime，以及 `ocr_lab` 是用于样本测试和日志分析的本地测试场。
+
+## Test Plan
+
+- 用 `ivic_app/ocr_lab/samples` 下的 PDF / 图片样本做回归测试，覆盖：
+  - 普通 PDF 文本层识别
+  - 扫描 PDF OCR
+  - 图片 OCR
+  - 版面辅助解析命中的 PDF
+  - 缺依赖、缺 Tesseract、缺语言包时的错误提示
+- 每次重构后记录识别结果、失败原因和环境诊断日志，保证可追踪。
+- 运行现有 Rust 单元测试和构建检查，确认改动不破坏主程序。
+- 在开发环境和 release 打包环境各跑一次 OCR 流程，确认字段输出一致。
+- 最终验收标准：
+  - 安装包内置 OCR 后，不依赖 `invoice_manager` 也能完成识别
+  - 前端导入流程不变
+  - 识别结果字段不变
+  - release 包体积显著低于旧方案，不再包含 PyQt 整套环境
+
+## Assumptions
+
+- 继续保留现有前端 OCR 调用入口和结果结构，不改 UI 交互。
+- 允许 `ocr_lab` 作为唯一 OCR 回归场，直接在本地反复试样本、打日志、分析问题。
+- 优先保证功能不变和安装后可用，再继续做更激进的体积优化。
+- 旧 `invoice_manager` 只作为迁移参考，不再作为 release 依赖。
+
+---
+
 # IVIC v2 施工准则
 
 本文档是后续施工的执行基线。所有功能、UI、重构和验收必须优先对照：

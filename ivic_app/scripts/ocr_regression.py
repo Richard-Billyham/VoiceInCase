@@ -13,7 +13,7 @@ from typing import Any
 
 APP_DIR = Path(__file__).resolve().parents[1]
 WORKSPACE_DIR = APP_DIR.parent
-LEGACY_DIR = WORKSPACE_DIR / "invoice_manager"
+OCR_RUNTIME_DIR = APP_DIR / ".ocr-runtime"
 LAYOUT_DIR = APP_DIR / "src-tauri" / "python"
 DEFAULT_SAMPLE_DIR = APP_DIR / "ocr_lab" / "samples"
 DEFAULT_LOG_DIR = APP_DIR / "ocr_lab" / "logs"
@@ -82,10 +82,10 @@ def main() -> int:
     sample_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    maybe_reexec_with_legacy_venv()
+    maybe_reexec_with_ocr_runtime()
     add_import_paths()
 
-    from extensions.ocr_service import format_ocr_environment_status, parse_invoice_file
+    from ivic_ocr.service import format_ocr_environment_status, parse_invoice_file
 
     try:
         from ivic_invoice_layout import parse_invoice_layout_file
@@ -169,9 +169,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def maybe_reexec_with_legacy_venv() -> None:
+def maybe_reexec_with_ocr_runtime() -> None:
     if os.environ.get("IVIC_OCR_REGRESSION_REEXEC") == "1":
         return
+
+    forced_python = os.environ.get("IVIC_PYTHON")
+    if forced_python:
+        target = Path(forced_python).resolve()
+        if not target.exists():
+            raise RuntimeError(f"IVIC_PYTHON does not exist: {target}")
+        env = os.environ.copy()
+        env["IVIC_OCR_REGRESSION_REEXEC"] = "1"
+        env.setdefault("PYTHONUTF8", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        os.execve(str(target), [str(target), *sys.argv], env)
 
     try:
         import fitz  # noqa: F401
@@ -180,7 +191,7 @@ def maybe_reexec_with_legacy_venv() -> None:
     except ImportError:
         pass
 
-    venv_python = LEGACY_DIR / ".venv" / "Scripts" / "python.exe"
+    venv_python = OCR_RUNTIME_DIR / "Scripts" / "python.exe"
     if not venv_python.exists():
         return
 
@@ -197,7 +208,7 @@ def maybe_reexec_with_legacy_venv() -> None:
 
 
 def add_import_paths() -> None:
-    for path in (str(LEGACY_DIR), str(LAYOUT_DIR)):
+    for path in (str(LAYOUT_DIR),):
         if path not in sys.path:
             sys.path.insert(0, path)
 
@@ -225,16 +236,16 @@ def inspect_invoice(
 ) -> dict[str, Any]:
     started = time.perf_counter()
     relative_path = safe_relative_path(file_path, sample_dir)
-    legacy_result: dict[str, Any] = {}
+    ocr_result: dict[str, Any] = {}
     layout_result: dict[str, Any] = {}
     merged_result: dict[str, Any] = {}
     sources: dict[str, str] = {}
     errors: list[str] = []
 
     try:
-        legacy_result = parse_invoice_file(str(file_path)) or {}
+        ocr_result = parse_invoice_file(str(file_path)) or {}
     except Exception as exc:
-        errors.append(f"legacy OCR error: {exc}")
+        errors.append(f"ocr error: {exc}")
 
     if parse_invoice_layout_file is None:
         errors.append("layout parser unavailable")
@@ -244,8 +255,8 @@ def inspect_invoice(
         except Exception as exc:
             errors.append(f"layout parser error: {exc}")
 
-    merged_result, sources = merge_app_ocr_result(legacy_result, layout_result)
-    issues, notes = diagnose_result(merged_result, legacy_result, layout_result, errors)
+    merged_result, sources = merge_app_ocr_result(ocr_result, layout_result)
+    issues, notes = diagnose_result(merged_result, ocr_result, layout_result, errors)
     duration_ms = round((time.perf_counter() - started) * 1000)
 
     return {
@@ -258,18 +269,18 @@ def inspect_invoice(
         "notes": notes,
         "final": keep_fields(merged_result, FINAL_FIELDS),
         "fieldSources": {key: sources.get(key, "") for key in FINAL_FIELDS},
-        "legacy": make_json_safe(legacy_result),
+        "ocr": make_json_safe(ocr_result),
         "layout": make_json_safe(layout_result),
     }
 
 
 def merge_app_ocr_result(
-    legacy_result: dict[str, Any],
+    ocr_result: dict[str, Any],
     layout_result: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    data = dict(legacy_result or {})
+    data = dict(ocr_result or {})
     sources = {
-        key: "legacy"
+        key: "ocr"
         for key, value in data.items()
         if not is_blank(value)
     }
@@ -290,7 +301,7 @@ def merge_app_ocr_result(
 
 def diagnose_result(
     final: dict[str, Any],
-    legacy: dict[str, Any],
+    ocr: dict[str, Any],
     layout: dict[str, Any],
     errors: list[str],
 ) -> tuple[list[str], list[str]]:
@@ -324,9 +335,9 @@ def diagnose_result(
     if invoice_number and not re.fullmatch(r"[0-9A-Z]{8,24}", invoice_number):
         issues.append(f"票号格式可疑：{invoice_number}")
 
-    if legacy and layout:
+    if ocr and layout:
         for field in ("buyer_tax_no", "seller_tax_no", "buyer_name", "seller_name"):
-            if is_blank(legacy.get(field)) and not is_blank(layout.get(field)):
+            if is_blank(ocr.get(field)) and not is_blank(layout.get(field)):
                 notes.append(f"{FIELD_LABELS[field]}由坐标增强补齐")
 
     return issues, notes
@@ -458,7 +469,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "",
                 "### 最终字段",
                 "",
-                "| 字段 | 值 | 来源 | 旧 OCR | 坐标增强 |",
+                "| 字段 | 值 | 来源 | IVIC OCR | 坐标增强 |",
                 "| --- | --- | --- | --- | --- |",
             ]
         )
@@ -470,7 +481,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                         FIELD_LABELS[field],
                         escape_md(final.get(field)),
                         escape_md(item["fieldSources"].get(field)),
-                        escape_md(item["legacy"].get(field)),
+                        escape_md(item["ocr"].get(field)),
                         escape_md(item["layout"].get(field)),
                     ]
                 )

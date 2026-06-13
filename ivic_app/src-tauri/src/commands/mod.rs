@@ -9,7 +9,7 @@ use std::{
 use chrono::Local;
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::db;
 use crate::errors::{AppError, AppResult};
@@ -183,12 +183,12 @@ pub fn save_group(app: AppHandle, group: ExpenseGroup) -> AppResult<AppData> {
 
 fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppResult<()> {
     conn.execute(
-        "INSERT INTO invoice(invoice_id, group_id, invoice_number, invoice_kind, issue_date, purchase_date, content_type, item_name, amount, tax_amount, description, raw_text, status, seller_name, seller_tax_no, buyer_name, buyer_tax_no, spec_model, unit, quantity, invoice_confirmed, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, CURRENT_TIMESTAMP)
+        "INSERT INTO invoice(invoice_id, group_id, invoice_number, invoice_kind, issue_date, purchase_date, content_type, item_name, invoice_item_name, amount, tax_amount, description, raw_text, status, seller_name, seller_tax_no, buyer_name, buyer_tax_no, spec_model, unit, quantity, invoice_confirmed, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, CURRENT_TIMESTAMP)
          ON CONFLICT(invoice_id) DO UPDATE SET
            group_id=excluded.group_id, invoice_number=excluded.invoice_number, invoice_kind=excluded.invoice_kind, issue_date=excluded.issue_date,
            purchase_date=excluded.purchase_date, content_type=excluded.content_type,
-           item_name=excluded.item_name, amount=excluded.amount, tax_amount=excluded.tax_amount,
+           item_name=excluded.item_name, invoice_item_name=excluded.invoice_item_name, amount=excluded.amount, tax_amount=excluded.tax_amount,
            description=excluded.description, raw_text=excluded.raw_text, status=excluded.status,
            seller_name=excluded.seller_name, seller_tax_no=excluded.seller_tax_no,
            buyer_name=excluded.buyer_name, buyer_tax_no=excluded.buyer_tax_no,
@@ -204,6 +204,7 @@ fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppRe
             record.purchase_date,
             record.content_type,
             record.title,
+            record.invoice_item_name,
             record.amount,
             record.tax_amount,
             record.remark,
@@ -368,28 +369,24 @@ pub fn recognize_invoice_attachment(
     let temp_path = files::ensure_inside(&data_dir, &ocr_dir.join(format!("{stamp}-{safe_name}")))?;
     fs::write(&temp_path, bytes)?;
 
-    let workspace = workspace_root()
-        .ok_or_else(|| AppError::Message("未找到项目根目录，无法启动 OCR".to_string()))?;
-    let script = workspace
-        .join("invoice_manager")
-        .join("extensions")
-        .join("ocr_service.py");
-    if !script.exists() {
-        return Err(AppError::Message(
-            "未找到旧版 OCR 模块 invoice_manager/extensions/ocr_service.py".to_string(),
-        ));
-    }
-    let python = python_executable(&workspace);
+    let runtime = resolve_ocr_runtime(&app)?;
     let code = r#"
 import json
+import os
 import sys
 from pathlib import Path
 
-workspace = Path(sys.argv[1])
+service_dir = Path(sys.argv[1])
 file_path = Path(sys.argv[2])
-sys.path.insert(0, str(workspace / "invoice_manager"))
-sys.path.insert(0, str(workspace / "ivic_app" / "src-tauri" / "python"))
-from extensions.ocr_service import format_ocr_environment_status, parse_invoice_file
+tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
+if tesseract_path:
+    tesseract = Path(tesseract_path)
+    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
+    tessdata = tesseract.parent / "tessdata"
+    if tessdata.exists():
+        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
+sys.path.insert(0, str(service_dir))
+from ivic_ocr.service import format_ocr_environment_status, parse_invoice_file
 try:
     from ivic_invoice_layout import parse_invoice_layout_file
 except Exception:
@@ -411,7 +408,7 @@ try:
     data = merge_layout_result(data, parse_invoice_layout_file(file_path))
     print(json.dumps({
         "ok": True,
-        "message": "OCR 识别完成",
+        "message": "OCR completed",
         "rawText": data.get("raw_text") or "",
         "invoiceNumber": data.get("invoice_number") or "",
         "invoiceType": data.get("invoice_type") or "",
@@ -451,15 +448,21 @@ except Exception as exc:
         "invoiceRemark": "",
     }, ensure_ascii=True))
 "#;
-    let output = Command::new(python)
+    let tesseract_arg = runtime
+        .tesseract
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let output = Command::new(&runtime.python)
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg("-c")
         .arg(code)
-        .arg(workspace)
+        .arg(&runtime.service_dir)
         .arg(&temp_path)
+        .arg(tesseract_arg)
         .output()
-        .map_err(|error| AppError::Message(format!("启动 OCR 失败：{error}")))?;
+        .map_err(|error| AppError::Message(format!("Failed to start OCR: {error}")))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stdout.trim().is_empty() {
@@ -551,13 +554,79 @@ pub fn delete_batch(app: AppHandle, id: i64) -> AppResult<AppData> {
     load_app_data(app)
 }
 
+struct OcrRuntime {
+    python: PathBuf,
+    service_dir: PathBuf,
+    tesseract: Option<PathBuf>,
+}
+
+fn resolve_ocr_runtime(app: &AppHandle) -> AppResult<OcrRuntime> {
+    if let Some(runtime) = bundled_ocr_runtime(app) {
+        return Ok(runtime);
+    }
+    if let Some(runtime) = development_ocr_runtime() {
+        return Ok(runtime);
+    }
+    Err(AppError::Message(
+        "OCR runtime was not found. Stage ivic_app/src-tauri/resources/ocr before release builds, or keep ivic_app/src-tauri/python/ivic_ocr for development.".to_string(),
+    ))
+}
+
+fn bundled_ocr_runtime(app: &AppHandle) -> Option<OcrRuntime> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let ocr_root = resource_dir.join("resources").join("ocr");
+    let service_dir = ocr_root.join("service");
+    let script = service_dir.join("ivic_ocr").join("service.py");
+    if !script.exists() {
+        return None;
+    }
+    let python = bundled_python_executable(&ocr_root)?;
+    Some(OcrRuntime {
+        python,
+        service_dir,
+        tesseract: bundled_tesseract_executable(&ocr_root),
+    })
+}
+
+fn bundled_python_executable(ocr_root: &Path) -> Option<PathBuf> {
+    [
+        ocr_root.join("python").join("python.exe"),
+        ocr_root.join("python").join("Scripts").join("python.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn bundled_tesseract_executable(ocr_root: &Path) -> Option<PathBuf> {
+    [
+        ocr_root.join("tesseract").join("tesseract.exe"),
+        ocr_root
+            .join("tesseract")
+            .join("Tesseract-OCR")
+            .join("tesseract.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+}
+
+fn development_ocr_runtime() -> Option<OcrRuntime> {
+    let workspace = workspace_root()?;
+    Some(OcrRuntime {
+        python: python_executable(&workspace),
+        service_dir: workspace.join("ivic_app").join("src-tauri").join("python"),
+        tesseract: None,
+    })
+}
+
 fn workspace_root() -> Option<PathBuf> {
     let mut current = std::env::current_dir().ok()?;
     loop {
         if current
-            .join("invoice_manager")
-            .join("extensions")
-            .join("ocr_service.py")
+            .join("ivic_app")
+            .join("src-tauri")
+            .join("python")
+            .join("ivic_ocr")
+            .join("service.py")
             .exists()
         {
             return Some(current);
@@ -568,19 +637,19 @@ fn workspace_root() -> Option<PathBuf> {
     }
 }
 
-fn python_executable(workspace: &Path) -> String {
+fn python_executable(workspace: &Path) -> PathBuf {
     if let Ok(path) = std::env::var("IVIC_PYTHON") {
-        return path;
+        return PathBuf::from(path);
     }
     let venv_python = workspace
-        .join("invoice_manager")
-        .join(".venv")
+        .join("ivic_app")
+        .join(".ocr-runtime")
         .join("Scripts")
         .join("python.exe");
     if venv_python.exists() {
-        return venv_python.to_string_lossy().to_string();
+        return venv_python;
     }
-    "python".to_string()
+    PathBuf::from("python")
 }
 
 fn infer_file_type(file_name: &str) -> String {

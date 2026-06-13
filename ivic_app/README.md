@@ -43,6 +43,23 @@ npm run tauri dev
 
 The browser dev mode uses `localStorage` as a safe fallback, while Tauri runtime calls Rust commands through `@tauri-apps/api/core`.
 
+## Release Build With OCR
+
+The packaged desktop app can bundle a local OCR runtime. Stage it before
+building the installer:
+
+```powershell
+.\scripts\prepare_ocr_runtime.ps1 -CreateRuntime
+npm run tauri build
+```
+
+The script creates or reuses `.ocr-runtime`, installs `ocr_requirements.txt`,
+copies `src-tauri/python/ivic_ocr`, `ivic_invoice_layout.py`, and a local
+Tesseract installation into `src-tauri/resources/ocr/`. That staged runtime is
+ignored by Git but included by Tauri as installer resources. If Tesseract is
+not installed locally, install it with the `chi_sim` language data or pass
+`-TesseractPath`.
+
 ## Product Baseline
 
 Primary source: `invoice-incase/pdr-v2.1.x/ivic-v2.1-pdr.tex`.

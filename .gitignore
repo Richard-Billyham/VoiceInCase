@@ -7,6 +7,7 @@ node_modules/
 .npm/
 .pnpm-store/
 .yarn/
+ivic_app/.ocr-runtime/
 
 # Frontend build output
 dist/
@@ -20,6 +21,10 @@ vite-dev.*.log
 target/
 **/target/
 **/src-tauri/gen/schemas/
+ivic_app/src-tauri/resources/ocr/**
+!ivic_app/src-tauri/resources/ocr/
+!ivic_app/src-tauri/resources/ocr/.gitkeep
+!ivic_app/src-tauri/resources/ocr/README.md
 
 # .NET build output
 bin/

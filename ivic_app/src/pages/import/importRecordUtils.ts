@@ -71,6 +71,7 @@ export function buildSingleRecord({
     sellerTaxNo: invoiceDetail.sellerTaxNo,
     buyerName: invoiceDetail.buyerName || "待确认购买方",
     buyerTaxNo: invoiceDetail.buyerTaxNo,
+    invoiceItemName: invoiceDetail.itemName || title,
     invoiceRemark: invoiceDetail.remark,
     itemSpecModel: sanitizeSpecModel(invoiceDetail.specModel),
     itemUnit: sanitizeUnit(invoiceDetail.unit),
@@ -90,6 +91,7 @@ export interface BatchRecordDraft extends BatchImportRow {
   itemQuantity?: number | null;
   itemSpecModel?: string;
   itemUnit?: string;
+  invoiceItemName?: string;
   sellerName?: string;
   sellerTaxNo?: string;
   taxAmount?: number;
@@ -121,6 +123,7 @@ export function buildBatchRecord(file: File, index: number, draft?: BatchRecordD
     sellerTaxNo: row.sellerTaxNo,
     buyerName: row.buyerName || "待确认购买方",
     buyerTaxNo: row.buyerTaxNo,
+    invoiceItemName: row.invoiceItemName || row.title,
     itemSpecModel: row.itemSpecModel,
     itemUnit: row.itemUnit,
     itemQuantity: row.itemQuantity ?? null,

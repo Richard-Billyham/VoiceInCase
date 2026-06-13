@@ -161,7 +161,7 @@ export function recordToInvoiceDetail(record: FormRecord | null): InvoiceDetailD
     subtotalAmount: record.amount && record.taxAmount ? String(Number((record.amount - record.taxAmount).toFixed(2))) : "",
     taxAmount: record.taxAmount ? String(record.taxAmount) : "",
     remark: record.invoiceRemark || "",
-    itemName: record.title || "",
+    itemName: record.invoiceItemName || record.title || "",
     specModel: sanitizeSpecModel(record.itemSpecModel || ""),
     unit: sanitizeUnit(record.itemUnit || ""),
     quantity: record.itemQuantity ? String(record.itemQuantity) : "",

@@ -46,6 +46,8 @@ pub struct FormRecord {
     #[serde(default)]
     pub buyer_tax_no: String,
     #[serde(default)]
+    pub invoice_item_name: String,
+    #[serde(default)]
     pub invoice_remark: String,
     #[serde(default)]
     pub item_spec_model: String,

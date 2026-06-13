@@ -27,6 +27,9 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "useLocalToolsDir": true,
+    "resources": {
+      "resources/ocr": "resources/ocr"
+    },
     "icon": ["icons/icon.ico"],
     "windows": {
       "nsis": {
