@@ -1,0 +1,149 @@
+[data-theme="night"] .search-feedback {
+  background: #262119;
+}
+
+[data-theme="night"] .status-bar {
+  background: #211c18;
+}
+
+[data-theme="night"] .boot-card,
+[data-theme="night"] .dashboard-overview-box,
+[data-theme="night"] .dashboard-reminder-box,
+[data-theme="night"] .dashboard-main-display,
+[data-theme="night"] .overview-band,
+[data-theme="night"] .work-panel,
+[data-theme="night"] .detail-panel,
+[data-theme="night"] .group-list-panel,
+[data-theme="night"] .modal-card,
+[data-theme="night"] .import-field-card,
+[data-theme="night"] .batch-quick-panel,
+[data-theme="night"] .income-attachment-panel,
+[data-theme="night"] .income-attachment-card {
+  background: var(--bg-surface);
+}
+
+[data-theme="night"] .dashboard-status-block,
+[data-theme="night"] .reminder-item,
+[data-theme="night"] .compact-result,
+[data-theme="night"] .group-card,
+[data-theme="night"] .setting-row,
+[data-theme="night"] .toggle-list label,
+[data-theme="night"] .about-box,
+[data-theme="night"] .toolbar-section,
+[data-theme="night"] .match-table button,
+[data-theme="night"] .quick-config-row,
+[data-theme="night"] .attachment-rule-card,
+[data-theme="night"] .batch-child-table,
+[data-theme="night"] .income-attachment-drop,
+[data-theme="night"] .income-attachment-empty,
+[data-theme="night"] .update-version-grid {
+  background: var(--bg-soft);
+}
+
+[data-theme="night"] .status-box,
+[data-theme="night"] .status-box.featured,
+[data-theme="night"] .amount-secondary-grid {
+  background: rgba(255, 241, 219, 0.035);
+}
+
+[data-theme="night"] .data-table,
+[data-theme="night"] .table-wrap,
+[data-theme="night"] input,
+[data-theme="night"] select,
+[data-theme="night"] textarea,
+[data-theme="night"] .global-search,
+[data-theme="night"] .field-with-icon,
+[data-theme="night"] .icon-button,
+[data-theme="night"] .icon-text-button,
+[data-theme="night"] .button,
+[data-theme="night"] .segmented-control button,
+[data-theme="night"] .group-select-box {
+  background: #211d19;
+  color: var(--text-main);
+}
+
+[data-theme="night"] .data-table th,
+[data-theme="night"] .batch-child-head {
+  background: #302820;
+}
+
+[data-theme="night"] .data-table tr:nth-child(even) td {
+  background: #28231e;
+}
+
+[data-theme="night"] .data-table tr.clickable:hover td,
+[data-theme="night"] .nav-item.active,
+[data-theme="night"] .income-attachment-drop.dragging,
+[data-theme="night"] .income-attachment-drop:focus-visible {
+  background: #332a21;
+}
+
+[data-theme="night"] .data-table tr.selected td,
+[data-theme="night"] .data-table tr.selected:hover td,
+[data-theme="night"] .match-table button.selected-temp,
+[data-theme="night"] .match-table button.selected-temp.matched-temp {
+  background: #25382f;
+  color: #cce8d7;
+}
+
+[data-theme="night"] .status-pill,
+[data-theme="night"] .group-badge {
+  background: #302820;
+}
+
+[data-theme="night"] .status-pill.success,
+[data-theme="night"] .difference-bar.success,
+[data-theme="night"] .form-toast {
+  background: #20342b;
+  color: var(--success);
+}
+
+[data-theme="night"] .status-pill.warning,
+[data-theme="night"] .match-toast,
+[data-theme="night"] .difference-bar.warning,
+[data-theme="night"] .import-error {
+  background: #3a2c1c;
+  color: var(--warning);
+}
+
+[data-theme="night"] .status-pill.danger,
+[data-theme="night"] .income-editor-error,
+[data-theme="night"] .submit-error-modal {
+  background: #3a2420;
+  color: var(--danger);
+}
+
+[data-theme="night"] .status-pill.info,
+[data-theme="night"] .match-table button.matched-temp {
+  background: #20313a;
+  color: var(--info);
+}
+
+[data-theme="night"] .dashboard-chart-row div,
+[data-theme="night"] .bar-row div,
+[data-theme="night"] .income-attachment-preview,
+[data-theme="night"] .batch-timeline span,
+[data-theme="night"] .batch-child-row {
+  background: #211d19;
+}
+
+[data-theme="night"] .external-drop-overlay {
+  background: rgba(35, 29, 22, 0.92);
+}
+
+[data-theme="night"] .modal-backdrop {
+  background: rgba(10, 8, 7, 0.62);
+}
+
+[data-theme="night"] .confirm-backdrop {
+  background: rgba(10, 8, 7, 0.72);
+}
+
+[data-theme="night"] .income-attachment-zoom,
+[data-theme="night"] .income-attachment-card > button {
+  background: rgba(33, 29, 25, 0.92);
+}
+
+[data-theme="night"] ::selection {
+  background: rgba(146, 197, 166, 0.32);
+}

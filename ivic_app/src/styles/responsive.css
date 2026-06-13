@@ -1,0 +1,222 @@
+.page-host {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.page-host > * {
+  min-width: 0;
+}
+
+.sidebar,
+.group-card-list,
+.reminder-list {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.modal-backdrop {
+  overflow: auto;
+  padding: 24px;
+}
+
+.modal-card {
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+@media (max-width: 1280px) {
+  .app-shell {
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+
+  .brand-block div,
+  .nav-item span,
+  .sidebar-foot {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+  }
+
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .page-host {
+    padding: 16px;
+  }
+
+  .dashboard-grid,
+  .dashboard-prototype,
+  .page-grid.with-detail,
+  .groups-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-prototype {
+    grid-template-rows: auto auto minmax(320px, 1fr);
+  }
+
+  .dashboard-overview-box,
+  .dashboard-reminder-box {
+    height: auto;
+  }
+
+  .dashboard-overview-head {
+    grid-template-columns: 1fr;
+  }
+
+  .group-select-box {
+    grid-column: auto;
+  }
+
+  .status-grid.compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .setting-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .setting-row input,
+  .setting-row button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .import-grid,
+  .batch-import-grid,
+  .import-modal.has-preview .import-workspace,
+  .income-editor-layout,
+  .reconcile-match-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .import-grid .wide,
+  .batch-import-grid > .drop-zone,
+  .batch-summary {
+    grid-column: auto;
+  }
+
+  .batch-main-row,
+  .batch-items > div {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .page-host {
+    padding: 14px;
+  }
+
+  .overview-band,
+  .panel-heading,
+  .difference-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .status-grid,
+  .status-grid.compact,
+  .amount-block,
+  .amount-secondary-grid,
+  .count-strip,
+  .metric-grid,
+  .action-section,
+  .batch-edit-grid,
+  .attachment-rule-grid,
+  .import-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .amount-secondary-grid .status-box,
+  .amount-secondary-grid .status-box:nth-child(odd),
+  .amount-secondary-grid .status-box:nth-last-child(-n + 2) {
+    border-width: 0 0 1px 0;
+  }
+
+  .amount-secondary-grid .status-box:last-child {
+    border-bottom-width: 0;
+  }
+
+  .count-item {
+    justify-content: start;
+  }
+
+  .count-item:not(:last-child)::after {
+    top: auto;
+    right: 14px;
+    bottom: 0;
+    left: 14px;
+    width: auto;
+    height: 1px;
+  }
+
+  .toolbar-section,
+  .backup-actions,
+  .settings-update-row {
+    align-items: stretch;
+  }
+
+  .toolbar-section .button,
+  .backup-actions .button,
+  .settings-update-row .button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 720px) {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    height: auto;
+  }
+
+  body {
+    overflow: auto;
+  }
+
+  .app-shell {
+    min-height: 100vh;
+    height: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .import-drag-handle {
+    min-height: 0;
+    padding-right: 0;
+  }
+
+  .import-modal-actions {
+    position: static;
+    max-width: none;
+    margin-bottom: 12px;
+  }
+
+  .workspace {
+    min-height: 100vh;
+    height: auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .page-host {
+    display: block;
+    overflow: visible;
+  }
+
+  .metric-grid,
+  .match-workbench,
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}

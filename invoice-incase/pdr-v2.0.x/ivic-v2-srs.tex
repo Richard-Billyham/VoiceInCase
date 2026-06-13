@@ -1,0 +1,840 @@
+\documentclass[UTF8,zihao=-4]{ctexart}
+
+\usepackage[a4paper,margin=2.2cm,headheight=15pt]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{titlesec}
+
+\graphicspath{{misc/new/}{misc/stylealike/}}
+
+\definecolor{ivicBrown}{HTML}{654236}
+\definecolor{ivicInk}{HTML}{2F2926}
+\definecolor{ivicPaper}{HTML}{F6F2EA}
+\definecolor{ivicBlue}{HTML}{9FD4F4}
+\definecolor{ivicLine}{HTML}{D7C8BF}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=ivicBrown,
+  urlcolor=ivicBrown,
+  citecolor=ivicBrown,
+  pdftitle={InVoice InCase v2.0.x 发票管理系统优化升级 SRS/PDR},
+  pdfauthor={InVoice InCase Project}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\textcolor{ivicBrown}{InVoice InCase / IVIC}}
+\rhead{\textcolor{ivicBrown}{v2.0.x SRS/PDR}}
+\cfoot{\thepage}
+
+\titleformat{\section}{\Large\bfseries\color{ivicBrown}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries\color{ivicInk}}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{ivicInk}}{\thesubsubsection}{0.8em}{}
+\captionsetup{font=small,labelfont=bf}
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em,topsep=0.25em}
+\setlist[enumerate]{leftmargin=2.2em,itemsep=0.25em,topsep=0.25em}
+\renewcommand{\arraystretch}{1.25}
+
+\newcommand{\req}[1]{\textbf{\textcolor{ivicBrown}{#1}}}
+\newcommand{\must}{\textbf{必须}}
+\newcommand{\should}{\textbf{应当}}
+\newcommand{\may}{\textbf{可以}}
+\newcommand{\figref}[1]{图~\ref{#1}}
+
+\begin{document}
+
+\begin{titlepage}
+  \centering
+  \vspace*{2.0cm}
+  {\Huge\bfseries\color{ivicBrown} InVoice InCase\par}
+  \vspace{0.3cm}
+  {\Large\bfseries IVIC v2.0.x 发票管理系统优化升级\par}
+  \vspace{0.8cm}
+  {\LARGE 软件需求规格说明书 / 产品需求文档\par}
+  \vspace{1.2cm}
+  {\large App 名称：InVoice InCase\par}
+  \vspace{0.2cm}
+  {\large 简写：IVIC\par}
+  \vspace{0.2cm}
+  {\large 含义：I See my Invoice；并入 InCase 个人工具生态\par}
+  \vfill
+  \begin{tabular}{rl}
+    文档版本： & 1.0 \\
+    目标版本： & v2.0.x \\
+    产品定位： & 个人离线桌面发票、报销、到账对账管理应用 \\
+    数据策略： & 核心功能不联网；数据、附件、配置均保存于本地；检测更新可由用户显式启用 \\
+    日期： & 2026 年 6 月 9 日 \\
+  \end{tabular}
+  \vfill
+  {\small 本文档依据现有 docs 设计说明、misc/new 界面草图与 misc/stylealike 视觉参考整理。}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{文档目的与范围}
+
+本文档定义 InVoice InCase（以下简称 IVIC）v2.0.x 的产品目标、业务范围、功能需求、数据结构、界面交互、非功能需求与验收标准。文档兼具 PDR 与 SRS 属性：前半部分说明产品定位、用户场景和设计原则，后半部分给出可实现、可测试的需求条目。
+
+IVIC v2.0.x 的核心目标不是把原系统简单换皮，而是将原有“项目-供应商-发票-报销单”的基础发票报销管理，升级为适合个人桌面使用的“票据采集、分组归集、批次提交、子订单跟踪、到账对账、异常结项”的本地工作台。
+
+\subsection{输入材料}
+
+本需求文档基于以下本地材料：
+
+\begin{itemize}
+  \item \texttt{docs/project-overview.md}：原项目总览，用于理解既有系统边界与基础模块。
+  \item \texttt{docs/data-structure-improvement.md}：数据结构改进草案，用于定义 v2.0.x 的数据模型升级方向。
+  \item \texttt{misc/new/*.png}：v2.0.x 主要界面草图与导入逻辑，是本文档关键需求来源。
+  \item \texttt{misc/stylealike/*.png}：InCase 系列 UI 风格参考，用于定义视觉与布局风格。
+\end{itemize}
+
+\subsection{术语}
+
+\begin{longtable}{p{3.2cm}p{11.2cm}}
+\toprule
+术语 & 定义 \\
+\midrule
+IVIC & InVoice InCase 的缩写，含义为 I See my Invoice，同时归入 InCase 生态。 \\
+发票 / 表单 & 用户导入或手动录入的票据与订单信息。草图中的“表单管理”可理解为发票、订单、附件的统一票据管理入口。 \\
+订单 & 需要与发票建立关系的业务条目，可由文本录入，也可由批次提交或学校系统材料产生。 \\
+报销批次 & 用户一次提交给财务、负责人或学校系统的一组报销材料。 \\
+报销子订单 & 报销批次内部的可独立跟踪条目，v2.0.x 中可关联一张发票或一个非发票费用条目；不纳入一张发票拆分到多个子订单、或多张发票合并为一个子订单的需求。 \\
+到账交易 & 银行到账、退款、冲销或其他资金流水记录。 \\
+对账 & 将到账交易与一个或多个报销批次、子订单进行匹配，并同步状态。 \\
+分组 & 面向个人使用的归集维度，可表示负责人、交接对象、比赛、实验室、报销场景或发票抬头规则。 \\
+异常结项 & 某笔子订单或批次因材料缺失、超期、财务拒绝、个人放弃等原因不再继续推进。 \\
+\bottomrule
+\end{longtable}
+
+\section{产品定位}
+
+\subsection{产品愿景}
+
+IVIC 是一款个人桌面发票管理应用。它服务于“我需要看清自己的发票、订单、报销与到账”的个人场景，而不是多人在线协同财务系统。应用的核心价值是：在不联网、不上传隐私数据的前提下，帮助用户把分散的发票 PDF、订单文本、截图附件、报销批次和到账流水组织成可查询、可追踪、可对账的本地资料库。
+
+产品名称 InVoice InCase 兼具两层含义：
+
+\begin{itemize}
+  \item \textbf{InVoice}：围绕 invoice 的发票、票据、金额与报销管理。
+  \item \textbf{InCase}：并入用户既有 InCase 工具生态，延续其桌面工作台式设计语言。
+  \item \textbf{I See my Invoice}：强调个人可见、可理解、可掌控自己的发票状态。
+\end{itemize}
+
+\subsection{目标用户}
+
+\begin{itemize}
+  \item 经常需要个人垫付、收集发票、提交报销、等待到账的学生、科研人员、实验室成员或个人项目维护者。
+  \item 需要把不同发票交给不同负责人、不同分组或不同场景处理的用户。
+  \item 需要在本地保留发票原件、截图附件、批次说明、到账记录的人。
+  \item 不希望使用联网 SaaS、不希望将发票和银行截图上传到外部服务的人。
+\end{itemize}
+
+\subsection{产品边界}
+
+\begin{longtable}{p{4.0cm}p{10.4cm}}
+\toprule
+范围类别 & 说明 \\
+\midrule
+必须覆盖 & 发票/订单导入、批量导入、表单管理、发票与订单匹配、提交批次管理、到账交易管理、到账对账、分组管理、本地设置、统计总览。 \\
+必须本地化 & 数据库文件、附件、发票 PDF、截图、配置文件均保存在本地；应用默认不依赖网络。 \\
+不作为 v2.0.x 目标 & 多用户权限、云同步、在线审批流、真实财务系统直连、自动网银拉取流水、企业级供应商主数据管理。 \\
+可预留扩展 & 本地 OCR 识别增强、文本识别规则、导出模板、备份恢复、InCase 生态内应用间跳转。 \\
+\bottomrule
+\end{longtable}
+
+\section{总体设计原则}
+
+\subsection{本地优先}
+
+\begin{itemize}
+  \item \req{PR-01} IVIC \must{}在无网络环境下完成主要功能，包括导入、编辑、查询、匹配、对账与导出。
+  \item \req{PR-02} 应用不得默认上传发票、附件、银行截图、数据库或使用统计。
+  \item \req{PR-03} 数据库配置应简化为“选择本地存储文件路径”，用户不应被迫理解数据库服务器、连接串、端口等概念。
+\end{itemize}
+
+\subsection{面向个人工作流}
+
+\begin{itemize}
+  \item \req{PR-04} 系统应减少维护成本，删除或隐藏个人场景价值不高的供应商主数据和项目预算字段。
+  \item \req{PR-05} 系统应允许用户先粗略导入，再通过表格、详情弹窗、匹配流程逐步修正。
+  \item \req{PR-06} 系统应允许不完美流程存在，例如部分到账、金额不一致、异常结项、材料缺失和人工备注。
+\end{itemize}
+
+\subsection{工作台式 UI}
+
+IVIC 的 UI 应参考 InCase 系列风格，采用低饱和暖色背景、深棕/墨色文字与边框、明确侧栏、圆角小于等于 8px 的面板与卡片、表格和卡片混合的工作台布局。界面应克制、清晰、可扫读，而不是营销式首页。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{incase-1.png}
+  \caption{InCase 风格参考：侧栏、厚描边面板、低饱和暖色工作台}
+  \label{fig:style-1}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{incase-4.png}
+  \caption{InCase 风格参考：导入、统计、预览、候选列表组合工作流}
+  \label{fig:style-4}
+\end{figure}
+
+\section{信息架构}
+
+IVIC v2.0.x 采用左侧主导航与右侧工作区结构。主导航至少包含：
+
+\begin{enumerate}
+  \item 首页 / 总览
+  \item 表单管理
+  \item 提交批次
+  \item 对账表
+  \item 分组管理
+  \item 设置
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{mainpage.png}
+  \caption{首页/总览草图}
+  \label{fig:mainpage}
+\end{figure}
+
+\subsection{首页 / 总览}
+
+首页用于呈现全局状态、提醒和快速检索结果。根据 \figref{fig:mainpage}，首页应包含：
+
+\begin{itemize}
+  \item 左侧固定导航栏，显示 LOGO 与模块入口，当前页以浅蓝或强调色标记。
+  \item 顶部搜索框，用于搜索发票、订单、批次、分组、到账交易。
+  \item 总览卡片，可按“全部”或特定分组切换，也可通过跟随按钮将数字变为星号以隐藏敏感金额。
+  \item 金额统计区，突出显示不同状态下的金额。
+  \item 数量统计区，显示不同状态下的表单、批次或交易数量。
+  \item 提醒开票区，展示条目、日期、金额、逾期时长和处理入口。
+  \item 主内容区，默认展示统计图像；搜索时切换为检索结果列表。
+  \item 底部窄状态栏，提示数据库状态、保存结果、导入结果和操作反馈。
+\end{itemize}
+
+\section{核心业务对象}
+
+\subsection{对象关系概览}
+
+v2.0.x 应将业务对象调整为以下结构：
+
+\begin{itemize}
+  \item 项目：可选的上层归属维度，保留但弱化预算职责。
+  \item 分组：负责人、交接对象、场景、发票抬头规则的核心归集维度。
+  \item 发票：票据本身，保存销售方文本字段、金额、日期、发票文件与附件。
+  \item 订单：可与发票匹配的业务条目。
+  \item 报销批次：一次提交材料的集合。
+  \item 报销子订单：批次内部可独立跟踪和对账的条目。
+  \item 到账交易：真实资金流水。
+  \item 对账匹配：到账交易与批次/子订单之间的匹配记录。
+  \item 附件：发票原件、银行截图、聊天记录、财务系统截图、补充材料等本地文件。
+\end{itemize}
+
+\subsection{状态模型}
+
+\begin{longtable}{p{3.2cm}p{4.2cm}p{7.0cm}}
+\toprule
+对象 & 状态 & 含义 \\
+\midrule
+发票/订单 & 待开票、待匹配、已匹配、待提交、已提交、已取消、异常 & 表达票据采集与提交前流程。 \\
+报销子订单 & 待提交、已提交、审核中、待补充、部分到账、已到账、已驳回、异常结项、已取消 & 表达批次内部条目的真实处理进度。 \\
+报销批次 & 待提交、已提交、处理中、部分到账、部分完成、已完成、需处理、异常结项、已取消 & 由子订单状态聚合得到，也允许人工备注说明。 \\
+到账交易 & 待对账、部分对账、已对账、异常 & 由匹配金额与交易金额关系推导。 \\
+\bottomrule
+\end{longtable}
+
+\section{功能需求}
+
+\subsection{通用布局与导航}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-GEN-01} & 系统\must{}提供固定左侧导航，包含首页/总览、表单管理、提交批次、对账表、分组管理、设置。 \\
+\req{FR-GEN-02} & 当前页面导航项\must{}有明确选中态，参考草图中的浅蓝底色或 InCase 风格中的棕色侧边高亮。 \\
+\req{FR-GEN-03} & 主要列表页\must{}包含功能区和表格/卡片区；功能区用于搜索、筛选、导入、导出、编辑、删除、匹配、提交等操作。 \\
+\req{FR-GEN-04} & 所有会修改数据的批量操作\must{}提供确认或可取消的临时状态，不得误触立即写库。 \\
+\req{FR-GEN-05} & 底部状态栏\should{}显示数据库连接/文件状态、保存成功/失败、导入结果、最近一次操作提示。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{首页 / 总览}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-HOME-01} & 首页\must{}显示按分组或全部数据汇总的金额统计，包括待提交、处理中、部分到账、已到账、异常等金额。 \\
+\req{FR-HOME-02} & 首页\must{}显示各状态表单、批次、到账交易的数量统计。 \\
+\req{FR-HOME-03} & 首页\must{}提供分组选择入口，用户可在全部数据与特定分组之间切换。 \\
+\req{FR-HOME-04} & 首页\should{}提供敏感金额隐藏开关，隐藏后金额数字显示为星号。 \\
+\req{FR-HOME-05} & 首页\must{}提供提醒开票区，展示条目名称、日期、金额、逾期天数、处理入口。 \\
+\req{FR-HOME-06} & 点击提醒条目\must{}跳转到表单管理，并高亮对应条目。 \\
+\req{FR-HOME-07} & 搜索框为空时，主区域\should{}展示统计图像；搜索框有内容时，主区域\must{}展示检索结果。 \\
+\req{FR-HOME-08} & 检索结果\must{}覆盖发票、订单、批次、到账交易、分组与附件备注。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{表单管理}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{sheetmanage.png}
+  \caption{表单管理草图}
+  \label{fig:sheetmanage}
+\end{figure}
+
+表单管理是 IVIC 的主要入口，用于维护发票、订单、附件和匹配关系。
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-SHEET-01} & 表单管理\must{}提供搜索框、导入、批量导入、多选、导出、提交、分组筛选、内容类型筛选、状态筛选、重置、匹配、编辑、删除按钮。 \\
+\req{FR-SHEET-02} & 导出按钮默认\must{}禁用；仅当选中一行或多行后启用。 \\
+\req{FR-SHEET-03} & 编辑按钮默认\must{}禁用；选中单行后启用，点击后弹出详情编辑窗口；多选时禁用。 \\
+\req{FR-SHEET-04} & 删除按钮默认\must{}禁用；选中一行或多行后启用；点击后必须弹出确认提醒，不得直接删除。 \\
+\req{FR-SHEET-05} & 提交按钮默认\must{}禁用；选中一行或多行后启用；点击后弹出批次提交窗口。 \\
+\req{FR-SHEET-06} & 分组、内容类型、状态筛选\must{}为下拉可复选控件。 \\
+\req{FR-SHEET-07} & 表格\must{}支持单元格直接编辑：点击项目后再次点击某单元格可编辑，回车或点击外部确认。 \\
+\req{FR-SHEET-08} & 双击表格条目\must{}打开可编辑详情文本框或详情弹窗。 \\
+\req{FR-SHEET-09} & 表头\must{}支持点击排序。 \\
+\req{FR-SHEET-10} & 表头宽度不足时，点击表头\should{}临时扩展到完整显示宽度，但应有上限；失焦后恢复。 \\
+\req{FR-SHEET-11} & 表格配色\should{}合理、浅色交替，重要信息列默认宽度较大，不重要信息列宽度较小。 \\
+\req{FR-SHEET-12} & 表单条目\must{}至少包含名称/摘要、金额、日期、分组、内容类型、状态、是否有发票、是否已匹配、附件数量、备注、更新时间。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{单条导入}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{addui.png}
+  \caption{单条导入 UI 草图}
+  \label{fig:addui}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-IMPORT-01} & 点击“导入”后\must{}打开单条导入窗口。 \\
+\req{FR-IMPORT-02} & 单条导入窗口\must{}包含订单文本框、发票拖拽/上传框、附件拖拽/上传框和提交按钮。 \\
+\req{FR-IMPORT-03} & 发票上传成功后，系统\must{}使用内置本地 OCR 或既有本地识别代码提取发票文本，并将上传框替换为可编辑的发票文本内容区域。 \\
+\req{FR-IMPORT-04} & 上传发票 PDF 后，右侧\must{}显示发票原文件预览窗口。 \\
+\req{FR-IMPORT-05} & 附件上传区\must{}支持备注输入，用于标记“银行到账截图”“发票原件”“聊天记录截图”“补充材料”等用途。 \\
+\req{FR-IMPORT-06} & 若窗口中没有任何有效内容，导入/提交按钮\must{}禁用。 \\
+\req{FR-IMPORT-07} & 导入前\must{}展示解析结果供用户确认；用户可修改错误字段后再确认入库。 \\
+\req{FR-IMPORT-08} & 确认导入后，系统\must{}写入发票、订单、附件及其关系，并返回表单管理刷新列表。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{批量导入}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\linewidth]{addui-batch.png}
+  \caption{批量导入 UI 草图}
+  \label{fig:adduibatch}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.84\linewidth]{addlogic.png}
+  \caption{导入逻辑草图}
+  \label{fig:addlogic}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-BIMPORT-01} & 点击“批量导入”后\must{}打开批量导入窗口。 \\
+\req{FR-BIMPORT-02} & 批量导入窗口\must{}支持一次导入多份发票文件。 \\
+\req{FR-BIMPORT-03} & 批量导入\must{}显示批量提交情况，包括总数、总金额、问题数量。 \\
+\req{FR-BIMPORT-04} & 系统\must{}生成预览表格，用户可点击单元格修改识别结果。 \\
+\req{FR-BIMPORT-05} & 右侧\must{}显示当前行对应的发票 PDF 预览；默认预览最新导入的那份发票原文件。 \\
+\req{FR-BIMPORT-06} & 批量导入流程\must{}先预览后确认；确认前不得写入正式表。 \\
+\req{FR-BIMPORT-07} & 存在识别错误时，系统\should{}允许用户修正后继续，而不是强制中断整个批量导入。 \\
+\req{FR-BIMPORT-08} & 确认导入后，系统\must{}批量写入发票、订单、附件和解析日志，并在表单管理中刷新。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{订单与发票匹配}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{sheetmanagematching.png}
+  \caption{表单管理匹配状态草图}
+  \label{fig:sheetmatch}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-MATCH-01} & 点击“匹配”后，表格区\must{}分为上下两个表格：上表显示未有发票的订单项目，下表显示已有发票的订单项目。 \\
+\req{FR-MATCH-02} & 上下两个表格\must{}均为单选模式；用户从上表和下表各选择一个项目后，可点击中间的 match 按钮建立匹配。 \\
+\req{FR-MATCH-03} & match 后，匹配项目\must{}只在上表显示，不再显示于下表；上表中该项目的 match 项颜色必须改变，用于提示临时匹配状态。 \\
+\req{FR-MATCH-04} & 用户选中上表中已 matched 的项目并点击 unmatch，系统\must{}拆分回未 matched 的上订单与下发票状态。 \\
+\req{FR-MATCH-05} & 点击“取消”后，本次匹配状态下的所有临时操作\must{}不保存。 \\
+\req{FR-MATCH-06} & 点击“完成匹配”后，本次匹配状态下的所有操作\must{}写入数据库。 \\
+\req{FR-MATCH-07} & 匹配状态下\must{}禁用表格单元格编辑和双击详情编辑。 \\
+\req{FR-MATCH-08} & 匹配状态下，功能区大部分按钮\should{}禁用，仅保留与匹配流程相关的按钮。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{提交批次}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{batchsubmit.png}
+  \caption{提交批次草图}
+  \label{fig:batchsubmit}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-BATCH-01} & 提交批次页\must{}提供搜索、多选、导出、分组筛选、内容类型筛选、状态筛选、重置、编辑、删除功能。 \\
+\req{FR-BATCH-02} & 提交批次页的按钮启禁逻辑\must{}与表单管理页保持一致。 \\
+\req{FR-BATCH-03} & 表格区\must{}以批次为一级行，每个批次行前显示可展开符号。 \\
+\req{FR-BATCH-04} & 点击展开符号后，符号\should{}旋转 90 度，并显示该批次下所有订单/子订单项目。 \\
+\req{FR-BATCH-05} & 双击批次或选中批次后点击编辑，\must{}弹出批次编辑窗口。 \\
+\req{FR-BATCH-06} & 批次编辑窗口左侧\must{}为批次详情编辑区，右侧\must{}为快速提交文本区。 \\
+\req{FR-BATCH-07} & 快速提交文本区\must{}支持复制粘贴，用于将批次信息快速提交到外部学校/财务系统，减少在发票页面与报账系统之间来回复制的麻烦。 \\
+\req{FR-BATCH-08} & 批次\must{}包含子订单数量、总金额、已到账金额、异常金额、状态、分组、提交日期、备注。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{对账表}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{incomesheet.png}
+  \caption{对账表草图}
+  \label{fig:income}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-REC-01} & 对账表页\must{}提供搜索、新增、多选、导出、分组筛选、内容类型筛选、状态筛选、重置、对账、编辑、删除功能。 \\
+\req{FR-REC-02} & 点击“新增”后\must{}弹出新增到账交易窗口，可填写到账金额、交易时间、备注，并上传或拖拽截图附件。 \\
+\req{FR-REC-03} & 点击“对账”后，表格区\must{}切换为对账状态，部分非对账按钮禁用。 \\
+\req{FR-REC-04} & 对账表中每个到账交易\must{}可展开显示该交易包含或关联的批次。 \\
+\req{FR-REC-05} & 点击批次后\must{}可展开显示批次内所有订单/子订单。 \\
+\req{FR-REC-06} & 若交易未完全到账或未完全匹配，展开区域\must{}显示哪些订单属于该交易、哪些不属于该交易。 \\
+\req{FR-REC-07} & 到账交易\must{}至少包含金额、时间、方向/分类、对账状态、附件数量、备注、创建时间、更新时间。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{到账对账匹配}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{incomesheetmatching.png}
+  \caption{到账对账状态草图}
+  \label{fig:incomematch}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-RECM-01} & 对账状态下，上表\must{}显示到账交易项目，下表\must{}显示待到账批次项目。 \\
+\req{FR-RECM-02} & 用户点击上表交易与下表批次/订单后，\must{}可建立对账关系；交易、批次、订单三层均应支持复选。 \\
+\req{FR-RECM-03} & 选择后，修改过的交易行、批次行、订单行\must{}改变颜色，用于表示临时对账状态。 \\
+\req{FR-RECM-04} & 左下角\must{}实时显示选中交易金额与计算得到的订单总金额之间的差额。 \\
+\req{FR-RECM-05} & 当交易金额与订单总金额相等时，差额模块\should{}显示为绿色或其他成功态。 \\
+\req{FR-RECM-06} & 单次对账\may{}处理多笔交易和多个批次/订单。 \\
+\req{FR-RECM-07} & 点击“完成”后\must{}保存对账关系并写入数据库。 \\
+\req{FR-RECM-08} & 若交易金额与订单总金额不匹配，系统\must{}允许继续完成，但必须给相关交易、批次、订单打上异常标记或对账差异标记。 \\
+\req{FR-RECM-09} & 点击“取消”后，本次对账状态下的临时操作\must{}全部丢弃。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{分组管理}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{groupmanage.png}
+  \caption{分组管理草图}
+  \label{fig:group}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-GROUP-01} & 分组管理页\must{}采用左侧分组卡片列表、右侧分组详情编辑区布局。 \\
+\req{FR-GROUP-02} & 左侧\must{}提供搜索框；分组卡片过多时\must{}支持滚动。 \\
+\req{FR-GROUP-03} & 分组卡片\must{}显示分组名称和简要信息。 \\
+\req{FR-GROUP-04} & 左侧列表末尾\must{}提供新增分组卡片。 \\
+\req{FR-GROUP-05} & 右侧详情\must{}管理分组名称、简介、发票抬头、备注、启用状态。 \\
+\req{FR-GROUP-06} & 发票抬头\must{}作为关键字段，用于识别发票归属。 \\
+\req{FR-GROUP-07} & 发票抬头编辑\should{}支持手动输入、粘贴文本自动识别、复用其他分组抬头。 \\
+\req{FR-GROUP-08} & 导入或匹配时，系统\should{}根据发票抬头规则自动建议分组。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{设置}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\linewidth]{settings.png}
+  \caption{设置页草图}
+  \label{fig:settings}
+\end{figure}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-SET-01} & 设置页\must{}隐藏复杂数据库配置，仅保留本地存储文件路径选择。 \\
+\req{FR-SET-02} & 用户选择本地存储文件路径后，系统\must{}自动创建或打开对应本地数据库。 \\
+\req{FR-SET-03} & 设置页\should{}提供日间/夜间模式设置。 \\
+\req{FR-SET-04} & 设置页\may{}提供检测更新入口；检测更新允许联网，但\must{}提供显式开关和隐私声明，且不得阻塞离线核心功能。 \\
+\req{FR-SET-05} & 设置页\should{}展示开发者信息、应用版本、数据文件路径、附件目录路径。 \\
+\req{FR-SET-06} & 常规设置修改后\should{}默认立即生效，不要求用户额外确认。 \\
+\bottomrule
+\end{longtable}
+
+\section{数据需求}
+
+\subsection{数据结构升级原则}
+
+根据现有数据结构改进方案，v2.0.x 的数据层应遵循：
+
+\begin{itemize}
+  \item 彻底删除供应商主数据表，发票表直接保存销售方名称、销售方税号等文本字段。
+  \item 彻底删除项目预算字段 \texttt{project.budget\_amount}，项目页改为展示发票、报销、到账、异常等统计。
+  \item 引入分组表，作为个人归集、负责人、场景和抬头识别的核心对象。
+  \item 引入报销子订单，解决一个批次内不同订单状态不一致的问题。
+  \item 引入到账交易和对账匹配，支持一笔交易匹配多个批次或子订单，也支持一笔子订单被多笔交易部分对账。
+  \item 附件增加备注，并逐步向通用附件模型演进。
+\end{itemize}
+
+\subsection{目标数据表}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+表名 & 说明 \\
+\midrule
+\texttt{project} & 项目/活动/课题等上层归属，弱化预算控制。 \\
+\texttt{expense\_group} & 分组、负责人、场景、发票抬头规则。 \\
+\texttt{invoice} & 发票主体信息，包含金额、日期、销售方文本字段、购买方文本字段、文件路径。 \\
+\texttt{order\_item} & 订单或待开票条目，可与发票匹配。 \\
+\texttt{attachment} & 通用附件或阶段性附件表，保存文件路径、类型、备注、所属对象。 \\
+\texttt{reimbursement} & 报销批次。 \\
+\texttt{reimbursement\_item} & 报销批次内部子订单。 \\
+\texttt{reconciliation\_transaction} & 到账交易、退款、冲销等资金流水。 \\
+\texttt{reconciliation\_match} & 到账交易与批次/子订单的匹配关系。 \\
+\texttt{status\_log} & 状态变更日志，可记录批次、子订单、交易等对象。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{关键字段建议}
+
+\subsubsection{expense\_group}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+字段 & 说明 \\
+\midrule
+\texttt{group\_id} & 分组 ID。 \\
+\texttt{group\_name} & 分组名称。 \\
+\texttt{owner\_name} & 负责人或交接人。 \\
+\texttt{category} & 分组类型，如比赛、实验室、个人垫付、导师待确认。 \\
+\texttt{invoice\_title\_rules} & 发票抬头识别规则，可保存为文本或结构化 JSON。 \\
+\texttt{color} & UI 展示颜色。 \\
+\texttt{remark} & 备注。 \\
+\texttt{is\_active} & 是否启用。 \\
+\texttt{created\_at / updated\_at} & 创建与更新时间。 \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{invoice}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+字段 & 说明 \\
+\midrule
+\texttt{invoice\_id} & 发票 ID。 \\
+\texttt{invoice\_no} & 发票号码。 \\
+\texttt{invoice\_date} & 开票日期。 \\
+\texttt{amount} & 含税金额或报销金额。 \\
+\texttt{seller\_name} & 销售方名称，替代供应商主数据。 \\
+\texttt{seller\_tax\_no} & 销售方税号。 \\
+\texttt{buyer\_name} & 购买方名称。 \\
+\texttt{buyer\_tax\_no} & 购买方税号。 \\
+\texttt{project\_id} & 所属项目，可为空。 \\
+\texttt{group\_id} & 所属分组。 \\
+\texttt{status} & 发票状态。 \\
+\texttt{source\_file\_path} & 发票 PDF 或图片原文件路径。 \\
+\texttt{raw\_text} & 识别出的原始文本。 \\
+\texttt{remark} & 备注。 \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{reimbursement\_item}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+字段 & 说明 \\
+\midrule
+\texttt{item\_id} & 子订单 ID。 \\
+\texttt{reimbursement\_id} & 所属报销批次。 \\
+\texttt{invoice\_id} & 来源发票，可为空。 \\
+\texttt{project\_id} & 所属项目，冗余便于查询。 \\
+\texttt{group\_id} & 所属分组。 \\
+\texttt{item\_name} & 子订单名称。 \\
+\texttt{amount} & 应报销金额。 \\
+\texttt{reconciled\_amount} & 已对账金额。 \\
+\texttt{status} & 子订单状态。 \\
+\texttt{exception\_reason} & 异常结项原因。 \\
+\texttt{exception\_time} & 异常结项时间。 \\
+\texttt{remark} & 备注。 \\
+\texttt{created\_at / updated\_at} & 创建与更新时间。 \\
+\bottomrule
+\end{longtable}
+
+\subsubsection{reconciliation\_transaction 与 reconciliation\_match}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+字段 & 说明 \\
+\midrule
+\texttt{transaction\_id} & 到账交易 ID。 \\
+\texttt{transaction\_no} & 交易编号，可为空。 \\
+\texttt{amount} & 交易金额。 \\
+\texttt{transaction\_time} & 到账或交易时间。 \\
+\texttt{category} & 分类，如报销到账、退款、个人垫付、补差、其他。 \\
+\texttt{direction} & 收入、支出、退款、冲销。 \\
+\texttt{status} & 待对账、部分对账、已对账、异常。 \\
+\texttt{remark} & 备注。 \\
+\texttt{match\_id} & 对账匹配 ID。 \\
+\texttt{matched\_amount} & 某次匹配金额。 \\
+\bottomrule
+\end{longtable}
+
+\section{业务规则}
+
+\subsection{批次状态聚合}
+
+报销批次状态应由其子订单状态聚合得到，规则如下：
+
+\begin{enumerate}
+  \item 如果所有子订单都是已取消，则批次为已取消。
+  \item 如果所有子订单都是异常结项，则批次为异常结项。
+  \item 如果所有有效子订单都是已到账，则批次为已完成。
+  \item 如果有效子订单中同时存在已到账和异常结项，且不存在待处理、审核中、待补充等未结束状态，则批次为部分完成。
+  \item 如果至少一个子订单是部分到账或已到账，但仍有未完成子订单，则批次为部分到账。
+  \item 如果任意子订单是待补充或已驳回，则批次为需处理。
+  \item 如果任意子订单是审核中或已提交，则批次为处理中。
+  \item 其他情况为待提交。
+\end{enumerate}
+
+\subsection{对账状态同步}
+
+\begin{longtable}{p{4.2cm}p{10.2cm}}
+\toprule
+对象 & 规则 \\
+\midrule
+子订单 & 若 \texttt{reconciled\_amount = 0}，保持原状态；若 \texttt{0 < reconciled\_amount < amount}，状态为部分到账；若 \texttt{reconciled\_amount >= amount}，状态为已到账。 \\
+到账交易 & 若匹配总额为 0，状态为待对账；小于交易金额，状态为部分对账；等于交易金额，状态为已对账；大于交易金额，状态为异常。 \\
+批次 & 任一子订单状态变化后，必须重新聚合批次状态。 \\
+金额差异 & 对账完成时若交易金额与订单总额不一致，允许保存，但必须标记异常或差异，不得静默忽略。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{异常结项}
+
+\begin{itemize}
+  \item 子订单\must{}支持异常结项状态，并记录异常原因、异常时间和备注。
+  \item 异常原因\should{}包括材料缺失、发票错误、超期、财务拒绝、重复提交、个人放弃、其他。
+  \item 异常结项\should{}不阻塞其他子订单继续完成。
+  \item 若批次内所有子订单均异常结项，则批次状态为异常结项。
+  \item 若批次内部分已到账、部分异常结项，且其余条目均已结束，则聚合为部分完成，并在详情中展示异常条目。
+\end{itemize}
+
+\section{导出与文件管理}
+
+\begin{longtable}{p{2.8cm}p{11.6cm}}
+\toprule
+编号 & 需求 \\
+\midrule
+\req{FR-EXP-01} & 表单管理、提交批次、对账表\must{}支持导出选中行。 \\
+\req{FR-EXP-02} & 导出内容\should{}支持 CSV 或 Excel 兼容格式。 \\
+\req{FR-EXP-03} & 导出模板\must{}支持适配特定学校/财务系统的字段顺序，字段顺序和模板细节允许后续手动调整。 \\
+\req{FR-EXP-04} & 批次编辑中的快速提交文本\must{}支持复制，\should{}可按模板生成。 \\
+\req{FR-FILE-01} & 发票原件、附件、截图\must{}保存在本地附件目录，并在数据库中保存相对路径或可迁移路径。 \\
+\req{FR-FILE-02} & 系统\must{}允许为附件填写备注。 \\
+\req{FR-FILE-03} & 删除业务对象前，系统\must{}提示是否同时处理本地附件文件；默认不应静默删除原文件。 \\
+\bottomrule
+\end{longtable}
+
+\section{非功能需求}
+
+\subsection{隐私与安全}
+
+\begin{itemize}
+  \item \req{NFR-SEC-01} 应用核心功能默认不联网，不上传用户数据；检测更新仅在用户显式开启后联网。
+  \item \req{NFR-SEC-02} 本地数据库路径和附件目录应可由用户查看与修改。
+  \item \req{NFR-SEC-03} 涉及删除、批量修改、完成匹配、完成对账等操作必须有明确确认或可取消阶段。
+  \item \req{NFR-SEC-04} 金额隐藏功能应在首页和必要统计区域生效。
+\end{itemize}
+
+\subsection{可靠性}
+
+\begin{itemize}
+  \item \req{NFR-REL-01} 导入、匹配、对账写库应使用事务；失败时不得产生半写入状态。
+  \item \req{NFR-REL-02} 批量导入应记录成功数量、失败数量、问题数量和可追踪错误信息。
+  \item \req{NFR-REL-03} 对账金额不一致时允许保存但必须标记，避免用户因现实流程不完美而无法推进。
+  \item \req{NFR-REL-04} 应保留状态变更日志，至少记录对象、原状态、新状态、时间、备注。
+\end{itemize}
+
+\subsection{易用性}
+
+\begin{itemize}
+  \item \req{NFR-USE-01} 常用功能应在两步内可达：导入、批量导入、筛选、匹配、提交、对账、导出。
+  \item \req{NFR-USE-02} 表格列宽、排序、筛选应服务于高频查看，不应让用户频繁横向滚动寻找核心信息。
+  \item \req{NFR-USE-03} 空状态、禁用按钮、异常标记、保存成功/失败应有明确视觉反馈。
+  \item \req{NFR-USE-04} 对于单条导入和批量导入，系统应允许先导入再修正，不要求识别完全准确。
+\end{itemize}
+
+\subsection{性能}
+
+\begin{itemize}
+  \item \req{NFR-PERF-01} 千级发票/订单数据下，列表筛选、搜索、排序响应应保持流畅。
+  \item \req{NFR-PERF-02} PDF 预览应按需加载当前选中行，避免批量导入时一次性加载所有 PDF。
+  \item \req{NFR-PERF-03} 首页统计应使用缓存或增量计算策略，避免每次切换都全表重算造成卡顿。
+\end{itemize}
+
+\section{UI 风格规范}
+
+\subsection{视觉方向}
+
+IVIC 应延续 InCase 生态视觉气质，但根据发票管理场景提高信息密度。推荐规范如下：
+
+\begin{itemize}
+  \item 背景：低饱和暖色，如米白、浅暖灰。
+  \item 主文字：深棕、黑褐或接近墨色。
+  \item 强调色：浅蓝用于当前模块选中态；深棕用于主按钮或高优先级操作。
+  \item 边框：清晰但不过重，列表与工作区可使用 1px 到 2px 棕灰边框。
+  \item 圆角：按钮、卡片、输入框建议不超过 8px，保持 InCase 的工具感。
+  \item 图标：导航与按钮可使用简洁线性图标；图标应辅助识别，不应替代关键文字。
+  \item 表格：浅色交替、状态色克制、金额与状态列突出。
+\end{itemize}
+
+\subsection{交互规范}
+
+\begin{itemize}
+  \item 禁用按钮必须有明显禁用态，不应只隐藏。
+  \item 临时匹配/临时对账状态必须用颜色或标记区别于已保存状态。
+  \item “完成匹配”“完成对账”是写库动作，必须与“取消”并列出现。
+  \item 表格编辑、详情编辑、批量编辑之间的入口应一致，减少学习成本。
+  \item 对用户而言复杂的数据库操作必须包装成文件路径选择、备份、恢复等可理解动作。
+\end{itemize}
+
+\section{实施计划}
+
+\subsection{阶段 1：低风险字段与 UI 调整}
+
+\begin{itemize}
+  \item 附件增加备注。
+  \item 发票增加销售方名称、销售方税号、购买方名称、购买方税号。
+  \item 新增分组表与发票分组字段。
+  \item UI 隐藏项目预算字段，首页改为发票/报销/到账统计。
+  \item 设置页简化数据库配置为本地文件路径选择。
+\end{itemize}
+
+\subsection{阶段 2：表单管理与导入升级}
+
+\begin{itemize}
+  \item 实现单条导入、批量导入、PDF 预览、识别结果修正。
+  \item 实现表格直接编辑、详情弹窗、筛选、排序、导出。
+  \item 实现订单与发票的临时匹配、取消、完成写库。
+\end{itemize}
+
+\subsection{阶段 3：批次与子订单}
+
+\begin{itemize}
+  \item 新增报销子订单模型。
+  \item 批次列表支持展开子订单。
+  \item 批次状态由子订单聚合。
+  \item 批次编辑窗口支持快速提交文本区。
+\end{itemize}
+
+\subsection{阶段 4：到账交易与对账}
+
+\begin{itemize}
+  \item 新增到账交易、对账匹配表。
+  \item 对账表支持交易-批次-订单三级展开。
+  \item 对账状态支持金额差异计算、异常标记、完成写库和取消。
+\end{itemize}
+
+\subsection{阶段 5：异常结项与日志}
+
+\begin{itemize}
+  \item 子订单支持异常结项。
+  \item 批次支持异常状态聚合。
+  \item 状态日志扩展到发票、订单、批次、子订单、到账交易。
+  \item 增加数据备份、恢复和迁移工具。
+\end{itemize}
+
+\section{验收标准}
+
+\begin{longtable}{p{3.0cm}p{11.4cm}}
+\toprule
+编号 & 验收标准 \\
+\midrule
+\req{AC-01} & 在断网环境下，用户可以完成导入发票、编辑表单、创建批次、记录到账、完成对账、导出数据。 \\
+\req{AC-02} & 首页可以按全部或分组展示金额和数量统计，并可隐藏敏感金额。 \\
+\req{AC-03} & 表单管理页按钮启禁逻辑符合草图说明：导出/编辑/删除/提交随选择状态变化。 \\
+\req{AC-04} & 单条导入支持订单文本、发票文件、附件备注和 PDF 预览；无内容时提交按钮禁用。 \\
+\req{AC-05} & 批量导入支持多文件、总数/总金额/问题数统计、可编辑预览表和当前 PDF 预览。 \\
+\req{AC-06} & 表单匹配流程支持上下双表、match、unmatch、取消不保存、完成后写库。 \\
+\req{AC-07} & 提交批次页支持批次展开显示子订单，并可编辑批次详情和快速提交文本。 \\
+\req{AC-08} & 对账表支持新增到账交易、上传截图附件、交易展开批次、批次展开订单。 \\
+\req{AC-09} & 到账对账支持多交易、多批次/订单选择，实时显示交易金额与订单总额差额；金额相等时显示成功态，金额不等时允许保存但标记异常。 \\
+\req{AC-10} & 分组管理支持分组卡片、搜索、新增、详情编辑、发票抬头规则维护和自动建议分组。 \\
+\req{AC-11} & 设置页不暴露复杂数据库配置，只要求用户选择本地存储文件路径。 \\
+\req{AC-12} & 数据库迁移后，旧供应商信息必须回填为发票销售方文本字段并彻底移除供应商表；项目预算字段 \texttt{project.budget\_amount} 必须彻底移除。 \\
+\bottomrule
+\end{longtable}
+
+\section{已确认决策与后续事项}
+
+以下内容已根据产品决策更新为 v2.0.x 需求基线：
+
+\begin{enumerate}
+  \item \textbf{彻底删除供应商主数据。} v2.0.x 不保留 \texttt{supplier} 表兼容层；历史供应商名称、税号等信息迁移到 \texttt{invoice.seller\_name}、\texttt{invoice.seller\_tax\_no} 等发票文本字段。
+  \item \textbf{彻底删除项目预算字段。} v2.0.x 不再保留 \texttt{project.budget\_amount}；项目页与首页统计改为围绕发票金额、报销金额、到账金额、异常金额和待处理数量组织。
+  \item \textbf{不纳入一拆多/多合一发票关联需求。} “一张发票拆成多个报销子订单”或“多张发票合并为一个报销子订单”不是当前已确认需求，v2.0.x 不实现 \texttt{reimbursement\_item\_invoice}。此前提出该问题的来源是 \texttt{docs/data-structure-improvement.md} 中“建议的新结构总览”部分的未来扩展建议，不来自 \texttt{misc/new} 界面草图，也不作为本版基线。
+  \item \textbf{部分到账 + 部分异常结项显示为部分完成。} 当批次内部分子订单已到账、部分子订单异常结项，且不存在仍需继续处理的子订单时，批次状态显示为“部分完成”。
+  \item \textbf{内置本地 OCR。} v2.0.x 使用源文件中已有的本地 OCR/识别代码作为发票识别基础，不做大规模重构；识别结果仍必须允许人工校正。
+  \item \textbf{导出模板需要适配特定学校/财务系统。} 导出字段顺序和模板细节应可配置或易于后续手动调整。
+  \item \textbf{检测更新允许联网。} 检测更新功能可联网，但必须提供显式开关和隐私声明；关闭后不得影响离线核心功能。
+\end{enumerate}
+
+\section{结论}
+
+IVIC v2.0.x 应定位为一个私密、离线、面向个人真实报销流程的桌面工作台。它的关键升级不是“增加更多表”，而是让系统能够表达现实中的不整齐状态：票据可能先有订单后有发票，批次内部可能状态不一致，到账可能分批，金额可能有差异，部分条目可能异常结项。通过分组、子订单、到账交易、对账匹配和明确的本地文件管理，IVIC 可以从基础发票记录工具升级为个人报销闭环管理工具。
+
+\end{document}

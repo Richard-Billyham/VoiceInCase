@@ -1,0 +1,110 @@
+# Keep this local-only project out of the repository.
+invoice_manager/
+
+# Dependencies
+node_modules/
+**/node_modules/
+.npm/
+.pnpm-store/
+.yarn/
+
+# Frontend build output
+dist/
+dist-ssr/
+build/
+.vite/
+*.tsbuildinfo
+vite-dev.*.log
+
+# Tauri / Rust build output
+target/
+**/target/
+**/src-tauri/gen/schemas/
+
+# .NET build output
+bin/
+obj/
+**/bin/
+**/obj/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Logs and local runtime output
+*.log
+*.err
+*.out
+logs/**
+**/logs/**
+!logs/.gitkeep
+!**/logs/.gitkeep
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.local
+
+# Temporary, cache, and debug scratch files
+.cache/
+**/.cache/
+tmp/
+temp/
+scratch/
+debug/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+
+# LaTeX generated files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.run.xml
+*.synctex.gz
+*.toc
+*.xdv
+
+# Windows / installer / compiled artifacts
+*.exe
+*.msi
+*.pdb
+*.dll
+*.dll.exp
+*.dll.lib
+*.lib
+*.rlib
+*.rmeta
+*.wixobj
+*.wixpdb
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
+# Local backup of previous oversized Git history
+.git-old-heavy-history/
+.git-bad-new-history/
