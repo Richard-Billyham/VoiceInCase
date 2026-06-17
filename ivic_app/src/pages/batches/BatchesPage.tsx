@@ -6,7 +6,7 @@ import { StatusPill } from "../../components/ui/StatusPill";
 import { ivicService } from "../../services/ivicService";
 import type { AppData } from "../../types/domain";
 import { formatMoney, statusTone } from "../../utils/format";
-import { normalizeBatchTimeline } from "./batchUtils";
+import { batchStatusDisplay, failedBatchItemCount, normalizeBatchTimeline, releasedBatchItemCount } from "./batchUtils";
 import { BatchDetailDialog } from "./BatchDetailDialog";
 import { buildQuickSubmitCopySections } from "./quickSubmitText";
 import { QuickCopyText } from "./QuickCopyText";
@@ -29,7 +29,7 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
   const editingBatch = editingBatchId ? batches.find((batch) => batch.id === editingBatchId) : null;
   const filteredBatches = batches.filter((batch) => {
     const needle = keyword.trim().toLowerCase();
-    return !needle || [batch.no, batch.groupName, batch.status, batch.remark].join(" ").toLowerCase().includes(needle);
+    return !needle || [batch.no, batch.groupName, batch.status, batchStatusDisplay(batch), batch.remark].join(" ").toLowerCase().includes(needle);
   });
 
   function toggleExpanded(id: number) {
@@ -37,7 +37,7 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
   }
 
   function exportBatches() {
-    const csv = ["批次号,分组,金额,状态,申请时间,备注", ...data.batches.map((batch) => [batch.no, batch.groupName, batch.totalAmount, batch.status, batch.applyTime, batch.remark].join(","))].join("\n");
+    const csv = ["批次号,分组,金额,状态,失败子订单数,已退回子订单数,申请时间,备注", ...batches.map((batch) => [batch.no, batch.groupName, batch.totalAmount, batchStatusDisplay(batch), failedBatchItemCount(batch), releasedBatchItemCount(batch), batch.applyTime, batch.remark].join(","))].join("\n");
     const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -75,15 +75,15 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
                 <strong>{batch.no}</strong>
                 <GroupBadge color={batch.groupId ? groupById.get(batch.groupId)?.color : undefined} name={batch.groupName} />
                 <span>{formatMoney(batch.totalAmount, hidden)}</span>
-                <StatusPill value={batch.status} tone={statusTone(batch.status)} />
+                <StatusPill value={batchStatusDisplay(batch)} tone={statusTone(batch.status)} />
               </button>
               {expandedIds.includes(batch.id) && (
                 <div className="batch-items">
                   {batch.items.map((item) => (
-                    <div key={item.id}>
+                    <div key={item.id} className={item.isReleased ? "released" : undefined}>
                       <span>{item.title}</span>
                       <span>{formatMoney(item.amount, hidden)}</span>
-                      <StatusPill value={item.status} tone={statusTone(item.status)} />
+                      <StatusPill value={item.isReleased ? "已退回" : item.status} tone={item.isReleased ? "neutral" : statusTone(item.status)} />
                     </div>
                   ))}
                 </div>
@@ -103,7 +103,9 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
               <span>修改时间 <strong>{activeBatch.updatedTime}</strong></span>
               {activeBatch.completedTime && <span>完成时间 <strong>{activeBatch.completedTime}</strong></span>}
               <span>总金额 <strong>{formatMoney(activeBatch.totalAmount, hidden)}</strong></span>
-              <span>子订单 <strong>{activeBatch.items.length} 条</strong></span>
+              <span>子订单 <strong>{activeBatch.items.filter((item) => !item.isReleased).length} 条</strong></span>
+              {failedBatchItemCount(activeBatch) > 0 && <span>失败项 <strong>{failedBatchItemCount(activeBatch)} 条</strong></span>}
+              {releasedBatchItemCount(activeBatch) > 0 && <span>已退回 <strong>{releasedBatchItemCount(activeBatch)} 条</strong></span>}
             </div>
             <label className="quick-submit">
               <span>快速复制文本</span>
@@ -139,6 +141,11 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
             hidden={hidden}
             onClose={() => setEditingBatchId(null)}
             onDelete={() => deleteBatchById(editingBatch.id)}
+            onReleaseItem={(itemId, targetStatus) =>
+              persist(ivicService.releaseBatchItemForRetry(editingBatch.id, itemId, targetStatus), "子订单已退回修改，可在订单页面补充后重新提交").then(() => {
+                setEditingBatchId(null);
+              })
+            }
             onSave={(batch) => {
               void persist(ivicService.saveBatch(batch), "批次详情已保存").then(() => {
                 setActiveId(batch.id);

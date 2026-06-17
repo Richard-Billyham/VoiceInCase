@@ -12,11 +12,13 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::db;
+use crate::domain;
 use crate::errors::{AppError, AppResult};
 use crate::files;
 use crate::models::{
     AppData, DroppedFilePayload, ExpenseGroup, FormMatchPair, FormRecord, OcrInvoiceResult,
-    ReconciliationTransaction, ReimbursementBatch, Settings, UploadedAttachmentPayload,
+    PersonMember, ReconciliationTransaction, ReimbursementBatch, Settings,
+    UploadedAttachmentPayload,
 };
 
 #[derive(Serialize)]
@@ -153,14 +155,63 @@ fn escape_powershell_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
 }
 
+fn resolve_member_name(
+    conn: &rusqlite::Connection,
+    member_id: Option<i64>,
+    fallback: &str,
+) -> AppResult<String> {
+    if let Some(id) = member_id {
+        let name = conn
+            .query_row(
+                "SELECT member_name FROM person_member WHERE member_id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(name) = name {
+            return Ok(name);
+        }
+    }
+    Ok(fallback.trim().to_string())
+}
+
+fn resolve_form_member(
+    conn: &rusqlite::Connection,
+    record: &FormRecord,
+) -> AppResult<(Option<i64>, String)> {
+    if record.member_id.is_some() {
+        return Ok((
+            record.member_id,
+            resolve_member_name(conn, record.member_id, &record.member_name)?,
+        ));
+    }
+    if !record.member_name.trim().is_empty() {
+        return Ok((None, record.member_name.trim().to_string()));
+    }
+    if let Some(group_id) = record.group_id {
+        let owner: Option<(Option<i64>, String)> = conn
+            .query_row(
+                "SELECT owner_id, owner_name FROM expense_group WHERE group_id = ?1",
+                params![group_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((owner_id, owner_name)) = owner {
+            return Ok((owner_id, resolve_member_name(conn, owner_id, &owner_name)?));
+        }
+    }
+    Ok((None, String::new()))
+}
+
 #[tauri::command]
 pub fn save_group(app: AppHandle, group: ExpenseGroup) -> AppResult<AppData> {
     let conn = db::connect(&app)?;
+    let owner_name = resolve_member_name(&conn, group.owner_id, &group.owner_name)?;
     conn.execute(
-        "INSERT INTO expense_group(group_id, group_name, owner_name, category, invoice_title_rule, quick_submit_template, attachment_rule_config, color, remark, is_active, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CURRENT_TIMESTAMP)
+        "INSERT INTO expense_group(group_id, group_name, owner_id, owner_name, category, invoice_title_rule, quick_submit_template, attachment_rule_config, color, remark, is_active, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP)
          ON CONFLICT(group_id) DO UPDATE SET
-           group_name=excluded.group_name, owner_name=excluded.owner_name, category=excluded.category,
+           group_name=excluded.group_name, owner_id=excluded.owner_id, owner_name=excluded.owner_name, category=excluded.category,
            invoice_title_rule=excluded.invoice_title_rule, quick_submit_template=excluded.quick_submit_template,
            attachment_rule_config=excluded.attachment_rule_config,
            color=excluded.color, remark=excluded.remark,
@@ -168,7 +219,8 @@ pub fn save_group(app: AppHandle, group: ExpenseGroup) -> AppResult<AppData> {
         params![
             group.id,
             group.name,
-            group.owner_name,
+            group.owner_id,
+            owner_name,
             group.category,
             group.title_rule,
             group.quick_submit_template,
@@ -181,12 +233,117 @@ pub fn save_group(app: AppHandle, group: ExpenseGroup) -> AppResult<AppData> {
     load_app_data(app)
 }
 
-fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppResult<()> {
+#[tauri::command]
+pub fn save_member(app: AppHandle, member: PersonMember) -> AppResult<AppData> {
+    let name = member.name.trim();
+    if name.is_empty() {
+        return Err(AppError::Message("人员名字不能为空。".to_string()));
+    }
+    let conn = db::connect(&app)?;
     conn.execute(
-        "INSERT INTO invoice(invoice_id, group_id, invoice_number, invoice_kind, issue_date, purchase_date, content_type, item_name, invoice_item_name, amount, tax_amount, description, raw_text, status, seller_name, seller_tax_no, buyer_name, buyer_tax_no, spec_model, unit, quantity, invoice_confirmed, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, CURRENT_TIMESTAMP)
+        "INSERT INTO person_member(member_id, member_name, phone, email, remark, is_active, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+         ON CONFLICT(member_id) DO UPDATE SET
+           member_name=excluded.member_name, phone=excluded.phone, email=excluded.email,
+           remark=excluded.remark, is_active=excluded.is_active, updated_at=CURRENT_TIMESTAMP",
+        params![
+            member.id,
+            name,
+            member.phone,
+            member.email,
+            member.remark,
+            member.is_active as i32
+        ],
+    )?;
+    conn.execute(
+        "UPDATE expense_group SET owner_name = ?1 WHERE owner_id = ?2",
+        params![name, member.id],
+    )?;
+    conn.execute(
+        "UPDATE invoice SET member_name = ?1 WHERE member_id = ?2",
+        params![name, member.id],
+    )?;
+    load_app_data(app)
+}
+
+#[tauri::command]
+pub fn delete_group(app: AppHandle, id: i64) -> AppResult<AppData> {
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE invoice
+         SET group_id = NULL, member_id = NULL, member_name = '', updated_at = CURRENT_TIMESTAMP
+         WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.execute(
+        "UPDATE reimbursement
+         SET group_id = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.execute(
+        "UPDATE reimbursement_item
+         SET group_id = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.execute(
+        "UPDATE order_item
+         SET group_id = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.execute("DELETE FROM expense_group WHERE group_id = ?1", params![id])?;
+    insert_status_log_tx(&tx, "group", id, None, "已删除", "删除分组并解除关联")?;
+    tx.commit()?;
+    load_app_data(app)
+}
+
+#[tauri::command]
+pub fn delete_member(app: AppHandle, id: i64) -> AppResult<AppData> {
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE expense_group
+         SET owner_id = NULL, owner_name = '', updated_at = CURRENT_TIMESTAMP
+         WHERE owner_id = ?1",
+        params![id],
+    )?;
+    tx.execute(
+        "UPDATE invoice
+         SET member_id = (
+             SELECT g.owner_id
+             FROM expense_group g
+             WHERE g.group_id = invoice.group_id
+         ),
+         member_name = COALESCE((
+             SELECT COALESCE(NULLIF(g.owner_name, ''), pm.member_name, '')
+             FROM expense_group g
+             LEFT JOIN person_member pm ON pm.member_id = g.owner_id
+             WHERE g.group_id = invoice.group_id
+         ), ''),
+         updated_at = CURRENT_TIMESTAMP
+         WHERE member_id = ?1",
+        params![id],
+    )?;
+    tx.execute(
+        "DELETE FROM person_member WHERE member_id = ?1",
+        params![id],
+    )?;
+    insert_status_log_tx(&tx, "member", id, None, "已删除", "删除人员并回退关联")?;
+    tx.commit()?;
+    load_app_data(app)
+}
+
+fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppResult<()> {
+    let (member_id, member_name) = resolve_form_member(conn, record)?;
+    conn.execute(
+        "INSERT INTO invoice(invoice_id, group_id, member_id, member_name, invoice_number, invoice_kind, issue_date, purchase_date, content_type, item_name, invoice_item_name, amount, tax_amount, description, raw_text, status, seller_name, seller_tax_no, buyer_name, buyer_tax_no, spec_model, unit, quantity, invoice_confirmed, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, CURRENT_TIMESTAMP)
          ON CONFLICT(invoice_id) DO UPDATE SET
-           group_id=excluded.group_id, invoice_number=excluded.invoice_number, invoice_kind=excluded.invoice_kind, issue_date=excluded.issue_date,
+           group_id=excluded.group_id, member_id=excluded.member_id, member_name=excluded.member_name,
+           invoice_number=excluded.invoice_number, invoice_kind=excluded.invoice_kind, issue_date=excluded.issue_date,
            purchase_date=excluded.purchase_date, content_type=excluded.content_type,
            item_name=excluded.item_name, invoice_item_name=excluded.invoice_item_name, amount=excluded.amount, tax_amount=excluded.tax_amount,
            description=excluded.description, raw_text=excluded.raw_text, status=excluded.status,
@@ -198,6 +355,8 @@ fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppRe
         params![
             record.id,
             record.group_id,
+            member_id,
+            member_name,
             record.invoice_number,
             record.invoice_kind,
             record.issue_date,
@@ -225,9 +384,20 @@ fn upsert_form_record(conn: &rusqlite::Connection, record: &FormRecord) -> AppRe
 
 #[tauri::command]
 pub fn save_form_record(app: AppHandle, record: FormRecord) -> AppResult<AppData> {
-    let conn = db::connect(&app)?;
-    upsert_form_record(&conn, &record)?;
-    sync_batch_items_for_form(&conn, record.id, &record.status)?;
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    let old_status = current_invoice_status(&tx, record.id)?;
+    upsert_form_record(&tx, &record)?;
+    sync_batch_items_for_form_tx(&tx, record.id, &record.status)?;
+    insert_status_log_tx(
+        &tx,
+        "invoice",
+        record.id,
+        old_status.as_deref(),
+        &record.status,
+        "保存表单",
+    )?;
+    tx.commit()?;
     load_app_data(app)
 }
 
@@ -261,6 +431,7 @@ pub fn save_form_with_attachments(
 
     let mut conn = db::connect(&app)?;
     let tx = conn.transaction()?;
+    let old_status = current_invoice_status(&tx, record.id)?;
     upsert_form_record(&tx, &record)?;
     for (attachment, relative_path) in stored_files {
         tx.execute(
@@ -276,6 +447,14 @@ pub fn save_form_with_attachments(
         )?;
     }
     sync_batch_items_for_form_tx(&tx, record.id, &record.status)?;
+    insert_status_log_tx(
+        &tx,
+        "invoice",
+        record.id,
+        old_status.as_deref(),
+        &record.status,
+        "保存表单及附件",
+    )?;
     tx.commit()?;
     load_app_data(app)
 }
@@ -289,8 +468,17 @@ pub fn save_matched_forms(
     let mut conn = db::connect(&app)?;
     let tx = conn.transaction()?;
     for record in &records {
+        let old_status = current_invoice_status(&tx, record.id)?;
         upsert_form_record(&tx, record)?;
         sync_batch_items_for_form_tx(&tx, record.id, &record.status)?;
+        insert_status_log_tx(
+            &tx,
+            "invoice",
+            record.id,
+            old_status.as_deref(),
+            &record.status,
+            "保存匹配结果",
+        )?;
     }
     for pair in pairs {
         if pair.order_id == pair.invoice_id {
@@ -477,8 +665,10 @@ except Exception as exc:
 
 #[tauri::command]
 pub fn delete_form_records(app: AppHandle, ids: Vec<i64>) -> AppResult<AppData> {
+    let data_dir = db::data_dir(&app)?;
     let mut conn = db::connect(&app)?;
     let tx = conn.transaction()?;
+    let mut attachment_paths = Vec::new();
     for id in ids {
         let batch_blocker = {
             let mut stmt = tx.prepare(
@@ -486,7 +676,8 @@ pub fn delete_form_records(app: AppHandle, ids: Vec<i64>) -> AppResult<AppData> 
                  FROM reimbursement_item ri
                  INNER JOIN reimbursement r ON r.reimbursement_id = ri.reimbursement_id
                  LEFT JOIN invoice i ON i.invoice_id = COALESCE(ri.invoice_id, ri.order_id)
-                 WHERE ri.invoice_id = ?1 OR ri.order_id = ?2
+                 WHERE (ri.invoice_id = ?1 OR ri.order_id = ?2)
+                   AND ri.is_released = 0
                  ORDER BY r.apply_time DESC
                  LIMIT 1",
             )?;
@@ -502,6 +693,7 @@ pub fn delete_form_records(app: AppHandle, ids: Vec<i64>) -> AppResult<AppData> 
                 "订单 {title} 已在报销批次 {batch_no} 中。请先删除对应报销批次，再删除订单。"
             )));
         }
+        attachment_paths.extend(load_attachment_paths_tx(&tx, "invoice", id)?);
         tx.execute(
             "DELETE FROM reconciliation_match
              WHERE item_id IN (SELECT item_id FROM reimbursement_item WHERE invoice_id = ?1)",
@@ -516,8 +708,10 @@ pub fn delete_form_records(app: AppHandle, ids: Vec<i64>) -> AppResult<AppData> 
             params![id],
         )?;
         tx.execute("DELETE FROM invoice WHERE invoice_id = ?1", params![id])?;
+        insert_status_log_tx(&tx, "invoice", id, None, "已删除", "删除表单")?;
     }
     tx.commit()?;
+    remove_attachment_files(&data_dir, attachment_paths)?;
     load_app_data(app)
 }
 
@@ -527,7 +721,7 @@ pub fn delete_batch(app: AppHandle, id: i64) -> AppResult<AppData> {
     let tx = conn.transaction()?;
     let form_ids = {
         let mut stmt = tx.prepare(
-            "SELECT COALESCE(invoice_id, order_id, 0) FROM reimbursement_item WHERE reimbursement_id = ?1",
+            "SELECT COALESCE(invoice_id, order_id, 0) FROM reimbursement_item WHERE reimbursement_id = ?1 AND is_released = 0",
         )?;
         let rows = stmt
             .query_map(params![id], |row| row.get::<_, i64>(0))?
@@ -542,11 +736,21 @@ pub fn delete_batch(app: AppHandle, id: i64) -> AppResult<AppData> {
         "DELETE FROM reimbursement WHERE reimbursement_id = ?1",
         params![id],
     )?;
+    insert_status_log_tx(&tx, "batch", id, None, "已删除", "删除批次")?;
     for form_id in form_ids {
         if form_id > 0 {
+            let old_status = current_invoice_status(&tx, form_id)?;
             tx.execute(
                 "UPDATE invoice SET status = '待提交', updated_at = CURRENT_TIMESTAMP WHERE invoice_id = ?1",
                 params![form_id],
+            )?;
+            insert_status_log_tx(
+                &tx,
+                "invoice",
+                form_id,
+                old_status.as_deref(),
+                "待提交",
+                "删除批次后回退",
             )?;
         }
     }
@@ -703,7 +907,154 @@ pub fn save_batch(app: AppHandle, batch: ReimbursementBatch) -> AppResult<AppDat
         ));
     }
     let tx = conn.transaction()?;
+    save_batch_tx(&tx, batch, existing_count == 0)?;
+    tx.commit()?;
+    load_app_data(app)
+}
+
+#[tauri::command]
+pub fn release_batch_item_for_retry(
+    app: AppHandle,
+    batch_id: i64,
+    item_id: i64,
+    target_status: Option<String>,
+) -> AppResult<AppData> {
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    let (form_id, title, amount, reconciled_amount, status, is_released): (
+        i64,
+        String,
+        f64,
+        f64,
+        String,
+        i64,
+    ) = tx
+        .query_row(
+            "SELECT COALESCE(invoice_id, order_id, 0), item_name, amount, reconciled_amount, status, is_released
+             FROM reimbursement_item
+             WHERE reimbursement_id = ?1 AND item_id = ?2",
+            params![batch_id, item_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Message("该子订单不在当前批次中，无法退回修改。".to_string()))?;
+    if is_released == 1 {
+        return Err(AppError::Message(
+            "该子订单已经退回修改，请勿重复操作。".to_string(),
+        ));
+    }
+    let wants_failure = target_status
+        .as_deref()
+        .map(domain::normalize_invoice_status)
+        .is_some_and(|value| value == "报销失败");
+    if status != "报销失败" && !wants_failure {
+        return Err(AppError::Message(
+            "只有报销失败的子订单可以退回修改。".to_string(),
+        ));
+    }
+    let match_count: i64 = tx.query_row(
+        "SELECT COUNT(1) FROM reconciliation_match WHERE item_id = ?1",
+        params![item_id],
+        |row| row.get(0),
+    )?;
+    if reconciled_amount > 0.01 && match_count > 0 {
+        return Err(AppError::Message(
+            "该子订单已有到账记录，请先处理对账记录后再退回修改。".to_string(),
+        ));
+    }
+    let mut batch = load_batch_for_update_tx(&tx, batch_id)?;
+    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    for item in &mut batch.items {
+        if item.id == item_id {
+            item.status = "报销失败".to_string();
+            item.reconciled_amount = 0.0;
+            item.is_released = true;
+            item.released_at = timestamp.clone();
+            item.release_reason = "报销失败退回修改".to_string();
+            item.remark = [item.remark.trim(), "已退回修改"]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join("；");
+        }
+    }
+    batch.total_amount = batch
+        .items
+        .iter()
+        .filter(|item| !item.is_released)
+        .map(|item| item.amount)
+        .sum();
+    batch.updated_time = timestamp.clone();
+    batch.status_timeline.push(crate::models::BatchStatusEvent {
+        status: batch.status.clone(),
+        timestamp: timestamp.clone(),
+        remark: format!(
+            "子订单“{title}”因报销失败退回修改，释放金额 {amount:.2}，表单回到待提交。"
+        ),
+    });
+    if !batch.items.iter().any(|item| !item.is_released) {
+        batch.status = "已取消".to_string();
+        batch.completed_time = Some(timestamp.clone());
+        batch.status_timeline.push(crate::models::BatchStatusEvent {
+            status: "已取消".to_string(),
+            timestamp: timestamp.clone(),
+            remark: "所有子订单已释放，批次自动取消。".to_string(),
+        });
+    }
+    save_batch_tx(&tx, batch, false)?;
+    let old_form_status = current_invoice_status(&tx, form_id)?;
+    tx.execute(
+        "UPDATE invoice SET status = '待提交', updated_at = ?1 WHERE invoice_id = ?2",
+        params![timestamp, form_id],
+    )?;
+    insert_status_log_tx(
+        &tx,
+        "invoice",
+        form_id,
+        old_form_status.as_deref(),
+        "待提交",
+        "报销失败退回修改",
+    )?;
+    insert_status_log_tx(
+        &tx,
+        "batch_item",
+        item_id,
+        Some(&status),
+        "已释放",
+        "报销失败退回修改",
+    )?;
+    tx.commit()?;
+    load_app_data(app)
+}
+
+fn save_batch_tx(
+    tx: &rusqlite::Transaction<'_>,
+    mut batch: ReimbursementBatch,
+    is_new: bool,
+) -> AppResult<()> {
+    batch.status = domain::normalize_batch_status(&batch.status);
+    for event in &mut batch.status_timeline {
+        event.status = domain::normalize_batch_status(&event.status);
+    }
+    validate_batch_tx(tx, &batch, is_new)?;
+    let item_details: Vec<(&str, f64)> = batch
+        .items
+        .iter()
+        .filter(|item| !item.is_released)
+        .map(|item| (item.status.as_str(), item.reconciled_amount))
+        .collect();
+    batch.status = domain::derive_batch_status_from_item_details(&batch.status, &item_details);
     let status_timeline = serde_json::to_string(&batch.status_timeline)?;
+    let old_batch_status = current_batch_status(tx, batch.id)?;
     let batch_status = batch.status.clone();
     let batch_updated_time = batch.updated_time.clone();
     tx.execute(
@@ -728,70 +1079,188 @@ pub fn save_batch(app: AppHandle, batch: ReimbursementBatch) -> AppResult<AppDat
             batch.updated_time
         ],
     )?;
+    insert_status_log_tx(
+        tx,
+        "batch",
+        batch.id,
+        old_batch_status.as_deref(),
+        &batch.status,
+        "保存批次",
+    )?;
     tx.execute(
         "DELETE FROM reimbursement_item WHERE reimbursement_id = ?1",
         params![batch.id],
     )?;
     for item in batch.items {
         tx.execute(
-            "INSERT INTO reimbursement_item(item_id, reimbursement_id, invoice_id, group_id, item_name, amount, reconciled_amount, status, exception_reason, remark)
-             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![item.id, batch.id, item.form_id, batch.group_id, item.title, item.amount, item.reconciled_amount, item.status, item.exception_reason, item.remark],
-        )?;
-        tx.execute(
-            "UPDATE invoice SET status = ?1, updated_at = ?2 WHERE invoice_id = ?3",
+            "INSERT INTO reimbursement_item(item_id, reimbursement_id, invoice_id, group_id, item_name, amount, reconciled_amount, status, is_released, released_at, release_reason, exception_reason, remark)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
-                form_status_for_batch_item(&batch_status, &item.status),
-                batch_updated_time,
-                item.form_id
+                item.id,
+                batch.id,
+                item.form_id,
+                batch.group_id,
+                item.title,
+                item.amount,
+                item.reconciled_amount,
+                item.status,
+                item.is_released as i32,
+                item.released_at,
+                item.release_reason,
+                item.exception_reason,
+                item.remark
             ],
         )?;
+        if item.is_released {
+            continue;
+        }
+        let old_form_status = current_invoice_status(tx, item.form_id)?;
+        let next_form_status = domain::form_status_for_batch_item(&batch_status, &item.status);
+        tx.execute(
+            "UPDATE invoice SET status = ?1, updated_at = ?2 WHERE invoice_id = ?3",
+            params![next_form_status, batch_updated_time, item.form_id],
+        )?;
+        insert_status_log_tx(
+            tx,
+            "invoice",
+            item.form_id,
+            old_form_status.as_deref(),
+            next_form_status,
+            "批次状态同步",
+        )?;
     }
-    tx.commit()?;
-    load_app_data(app)
+    Ok(())
 }
 
-fn form_status_for_batch_item(batch_status: &str, item_status: &str) -> &'static str {
-    if batch_status == "已到账" || item_status == "已到账" {
-        return "已到账";
-    }
-    if batch_status == "已报销" || item_status == "已报销" {
-        return "已到账";
-    }
-    if batch_status == "异常处理" || batch_status == "已取消" || item_status == "报销失败"
-    {
-        return "报销失败";
-    }
-    if batch_status == "已提交" || batch_status == "部分到账" || item_status == "已提交" {
-        return "已提交";
-    }
-    "批次创建"
-}
-
-fn batch_item_status_for_form_status(status: &str) -> &'static str {
-    match status {
-        "已到账" => "已到账",
-        "已报销" => "已到账",
-        "报销失败" => "报销失败",
-        "已提交" => "已提交",
-        "批次创建" | "待提交" => "批次创建",
-        _ => "批次创建",
-    }
-}
-
-fn sync_batch_items_for_form(
-    conn: &rusqlite::Connection,
-    form_id: i64,
-    status: &str,
-) -> AppResult<()> {
-    conn.execute(
-        "UPDATE reimbursement_item
-         SET status = ?1,
-             reconciled_amount = 0,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE invoice_id = ?2",
-        params![batch_item_status_for_form_status(status), form_id],
+fn load_batch_for_update_tx(
+    tx: &rusqlite::Transaction<'_>,
+    batch_id: i64,
+) -> AppResult<ReimbursementBatch> {
+    let mut batch: ReimbursementBatch = tx
+        .query_row(
+            "SELECT r.reimbursement_id, r.reimbursement_no, r.group_id, COALESCE(g.group_name, ''),
+                    r.total_amount, r.status, r.apply_time, r.completed_time, r.status_timeline,
+                    r.remark, r.quick_submit_text, r.updated_at
+             FROM reimbursement r
+             LEFT JOIN expense_group g ON g.group_id = r.group_id
+             WHERE r.reimbursement_id = ?1",
+            params![batch_id],
+            |row| {
+                let timeline_json: String = row.get(8)?;
+                Ok(ReimbursementBatch {
+                    id: row.get(0)?,
+                    no: row.get(1)?,
+                    group_id: row.get(2)?,
+                    group_name: row.get(3)?,
+                    total_amount: row.get(4)?,
+                    status: row.get(5)?,
+                    apply_time: row.get(6)?,
+                    completed_time: row.get(7)?,
+                    status_timeline: serde_json::from_str(&timeline_json).unwrap_or_default(),
+                    remark: row.get(9)?,
+                    quick_submit_text: row.get(10)?,
+                    updated_time: row.get(11)?,
+                    items: Vec::new(),
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::Message("报销批次不存在，无法退回修改。".to_string()))?;
+    let mut stmt = tx.prepare(
+        "SELECT item_id, reimbursement_id, COALESCE(invoice_id, order_id, 0), item_name, amount,
+                reconciled_amount, status, is_released, released_at, release_reason, exception_reason, remark
+         FROM reimbursement_item
+         WHERE reimbursement_id = ?1
+         ORDER BY item_id",
     )?;
+    batch.items = stmt
+        .query_map(params![batch_id], |row| {
+            Ok(crate::models::ReimbursementItem {
+                id: row.get(0)?,
+                batch_id: row.get(1)?,
+                form_id: row.get(2)?,
+                title: row.get(3)?,
+                amount: row.get(4)?,
+                reconciled_amount: row.get(5)?,
+                status: row.get(6)?,
+                is_released: row.get::<_, i64>(7)? == 1,
+                released_at: row.get(8)?,
+                release_reason: row.get(9)?,
+                exception_reason: row.get(10)?,
+                remark: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(batch)
+}
+
+fn validate_batch_tx(
+    tx: &rusqlite::Transaction<'_>,
+    batch: &ReimbursementBatch,
+    is_new: bool,
+) -> AppResult<()> {
+    if is_new && !matches!(batch.status.as_str(), "待提交" | "已提交") {
+        return Err(AppError::Message(
+            "新建提交批次只能从“待提交”或“已提交”开始。".to_string(),
+        ));
+    }
+    let mut group_id: Option<Option<i64>> = None;
+    for item in &batch.items {
+        if !matches!(
+            item.status.as_str(),
+            "批次创建" | "已提交" | "已到账" | "报销失败"
+        ) {
+            return Err(AppError::Message(format!(
+                "批次内子订单“{}”只能保存为批次创建、已提交、已到账或报销失败。",
+                item.title
+            )));
+        }
+        if item.reconciled_amount < 0.0 || item.reconciled_amount > item.amount + 0.01 {
+            return Err(AppError::Message(format!(
+                "批次内子订单“{}”的到账金额不能小于 0 或超过应到账金额。",
+                item.title
+            )));
+        }
+        if is_new {
+            let form: Option<(String, String, Option<i64>)> = tx
+                .query_row(
+                    "SELECT item_name, content_type, group_id FROM invoice WHERE invoice_id = ?1",
+                    params![item.form_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()?;
+            let Some((title, content_type, item_group_id)) = form else {
+                return Err(AppError::Message(format!(
+                    "子订单“{}”对应的表单不存在，无法创建提交批次。",
+                    item.title
+                )));
+            };
+            if content_type != "订单+发票" {
+                return Err(AppError::Message(format!(
+                    "“{title}”的类型是“{content_type}”，只有“订单+发票”可以提交。"
+                )));
+            }
+            let duplicate_count: i64 = tx.query_row(
+                "SELECT COUNT(1) FROM reimbursement_item WHERE (invoice_id = ?1 OR order_id = ?1) AND is_released = 0",
+                params![item.form_id],
+                |row| row.get(0),
+            )?;
+            if duplicate_count > 0 {
+                return Err(AppError::Message(format!(
+                    "“{title}”已经在提交批次中，请不要重复提交。"
+                )));
+            }
+            if let Some(existing_group_id) = group_id {
+                if existing_group_id != item_group_id {
+                    return Err(AppError::Message(
+                        "选中的表单属于不同分组，请按同一分组分别提交。".to_string(),
+                    ));
+                }
+            } else {
+                group_id = Some(item_group_id);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -803,11 +1272,88 @@ fn sync_batch_items_for_form_tx(
     tx.execute(
         "UPDATE reimbursement_item
          SET status = ?1,
-             reconciled_amount = 0,
              updated_at = CURRENT_TIMESTAMP
-         WHERE invoice_id = ?2",
-        params![batch_item_status_for_form_status(status), form_id],
+         WHERE invoice_id = ?2 AND is_released = 0",
+        params![domain::batch_item_status_for_form_status(status), form_id],
     )?;
+    Ok(())
+}
+
+fn current_invoice_status(
+    conn: &rusqlite::Connection,
+    invoice_id: i64,
+) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT status FROM invoice WHERE invoice_id = ?1",
+            params![invoice_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn current_batch_status(conn: &rusqlite::Connection, batch_id: i64) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT status FROM reimbursement WHERE reimbursement_id = ?1",
+            params![batch_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn current_transaction_status(
+    conn: &rusqlite::Connection,
+    transaction_id: i64,
+) -> AppResult<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT status FROM reconciliation_transaction WHERE transaction_id = ?1",
+            params![transaction_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn insert_status_log_tx(
+    tx: &rusqlite::Transaction<'_>,
+    owner_type: &str,
+    owner_id: i64,
+    old_status: Option<&str>,
+    new_status: &str,
+    remark: &str,
+) -> AppResult<()> {
+    if old_status == Some(new_status) {
+        return Ok(());
+    }
+    tx.execute(
+        "INSERT INTO status_log(owner_type, owner_id, old_status, new_status, remark)
+         VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![owner_type, owner_id, old_status, new_status, remark],
+    )?;
+    Ok(())
+}
+
+fn load_attachment_paths_tx(
+    tx: &rusqlite::Transaction<'_>,
+    owner_type: &str,
+    owner_id: i64,
+) -> AppResult<Vec<String>> {
+    let mut stmt =
+        tx.prepare("SELECT relative_path FROM attachment WHERE owner_type = ?1 AND owner_id = ?2")?;
+    let rows = stmt
+        .query_map(params![owner_type, owner_id], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn remove_attachment_files(data_dir: &Path, relative_paths: Vec<String>) -> AppResult<()> {
+    for relative_path in relative_paths {
+        let target = files::ensure_inside(data_dir, &data_dir.join(relative_path))?;
+        if target.is_file() {
+            fs::remove_file(target)?;
+        }
+    }
     Ok(())
 }
 
@@ -818,7 +1364,16 @@ pub fn save_transaction(
 ) -> AppResult<AppData> {
     let mut conn = db::connect(&app)?;
     let tx = conn.transaction()?;
+    let old_status = current_transaction_status(&tx, transaction.id)?;
     upsert_transaction_tx(&tx, &transaction)?;
+    insert_status_log_tx(
+        &tx,
+        "transaction",
+        transaction.id,
+        old_status.as_deref(),
+        &transaction.status,
+        "保存到账收入",
+    )?;
     tx.commit()?;
     load_app_data(app)
 }
@@ -853,6 +1408,7 @@ pub fn save_transaction_with_attachments(
 
     let mut conn = db::connect(&app)?;
     let tx = conn.transaction()?;
+    let old_status = current_transaction_status(&tx, transaction.id)?;
     upsert_transaction_tx(&tx, &transaction)?;
     for (attachment, relative_path) in stored_files {
         tx.execute(
@@ -867,11 +1423,147 @@ pub fn save_transaction_with_attachments(
             ],
         )?;
     }
+    insert_status_log_tx(
+        &tx,
+        "transaction",
+        transaction.id,
+        old_status.as_deref(),
+        &transaction.status,
+        "保存到账收入及附件",
+    )?;
     tx.commit()?;
     load_app_data(app)
 }
 
+#[tauri::command]
+pub fn save_reconciliation_result(
+    app: AppHandle,
+    batches: Vec<ReimbursementBatch>,
+    mut transaction: ReconciliationTransaction,
+) -> AppResult<AppData> {
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    let previous_reconciled = load_reconciled_amounts_for_transaction_items(&tx, &transaction)?;
+    let match_amounts =
+        collect_reconciliation_match_amounts(&batches, &transaction, &previous_reconciled);
+    let matched_total: f64 = match_amounts.iter().map(|(_, _, amount)| amount).sum();
+    transaction.status =
+        domain::transaction_status_for_match_total(transaction.amount, matched_total);
+    for batch in batches {
+        save_batch_tx(&tx, batch, false)?;
+    }
+    let old_status = current_transaction_status(&tx, transaction.id)?;
+    upsert_transaction_with_match_amounts_tx(&tx, &transaction, &match_amounts)?;
+    insert_status_log_tx(
+        &tx,
+        "transaction",
+        transaction.id,
+        old_status.as_deref(),
+        &transaction.status,
+        "保存到账对账结果",
+    )?;
+    tx.commit()?;
+    load_app_data(app)
+}
+
+fn load_reconciled_amounts_for_transaction_items(
+    tx: &rusqlite::Transaction<'_>,
+    transaction: &ReconciliationTransaction,
+) -> AppResult<std::collections::HashMap<i64, f64>> {
+    let mut amounts = std::collections::HashMap::new();
+    for item_id in &transaction.matched_item_ids {
+        let amount = tx
+            .query_row(
+                "SELECT reconciled_amount FROM reimbursement_item WHERE item_id = ?1",
+                params![item_id],
+                |row| row.get::<_, f64>(0),
+            )
+            .optional()?
+            .unwrap_or(0.0);
+        amounts.insert(*item_id, amount);
+    }
+    Ok(amounts)
+}
+
+fn collect_reconciliation_match_amounts(
+    batches: &[ReimbursementBatch],
+    transaction: &ReconciliationTransaction,
+    previous_reconciled: &std::collections::HashMap<i64, f64>,
+) -> Vec<(i64, i64, f64)> {
+    let selected: std::collections::HashSet<i64> =
+        transaction.matched_item_ids.iter().copied().collect();
+    batches
+        .iter()
+        .flat_map(|batch| {
+            batch.items.iter().filter_map(|item| {
+                if !selected.contains(&item.id) {
+                    return None;
+                }
+                let previous = previous_reconciled.get(&item.id).copied().unwrap_or(0.0);
+                let matched = (item.reconciled_amount - previous).max(0.0);
+                (matched > 0.0).then_some((batch.id, item.id, matched))
+            })
+        })
+        .collect()
+}
+
 fn upsert_transaction_tx(
+    tx: &rusqlite::Transaction<'_>,
+    transaction: &ReconciliationTransaction,
+) -> AppResult<()> {
+    upsert_transaction_base_tx(tx, transaction)?;
+    tx.execute(
+        "DELETE FROM reconciliation_match WHERE transaction_id = ?1",
+        params![transaction.id],
+    )?;
+    let mut remaining_amount = transaction.amount;
+    for item_id in &transaction.matched_item_ids {
+        if remaining_amount <= 0.0 {
+            break;
+        }
+        let item: Option<(i64, f64)> = tx
+            .query_row(
+                "SELECT reimbursement_id, MAX(amount - reconciled_amount, 0) FROM reimbursement_item WHERE item_id = ?1 AND is_released = 0",
+                params![item_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((batch_id, item_amount)) = item {
+            let matched_amount = remaining_amount.min(item_amount).max(0.0);
+            if matched_amount > 0.0 {
+                tx.execute(
+                    "INSERT INTO reconciliation_match(transaction_id, reimbursement_id, item_id, matched_amount, remark)
+                     VALUES(?1, ?2, ?3, ?4, '')",
+                    params![transaction.id, batch_id, item_id, matched_amount],
+                )?;
+                remaining_amount -= matched_amount;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn upsert_transaction_with_match_amounts_tx(
+    tx: &rusqlite::Transaction<'_>,
+    transaction: &ReconciliationTransaction,
+    match_amounts: &[(i64, i64, f64)],
+) -> AppResult<()> {
+    upsert_transaction_base_tx(tx, transaction)?;
+    tx.execute(
+        "DELETE FROM reconciliation_match WHERE transaction_id = ?1",
+        params![transaction.id],
+    )?;
+    for (batch_id, item_id, matched_amount) in match_amounts {
+        tx.execute(
+            "INSERT INTO reconciliation_match(transaction_id, reimbursement_id, item_id, matched_amount, remark)
+             VALUES(?1, ?2, ?3, ?4, '')",
+            params![transaction.id, batch_id, item_id, matched_amount],
+        )?;
+    }
+    Ok(())
+}
+
+fn upsert_transaction_base_tx(
     tx: &rusqlite::Transaction<'_>,
     transaction: &ReconciliationTransaction,
 ) -> AppResult<()> {
@@ -893,34 +1585,6 @@ fn upsert_transaction_tx(
             transaction.remark
         ],
     )?;
-    tx.execute(
-        "DELETE FROM reconciliation_match WHERE transaction_id = ?1",
-        params![transaction.id],
-    )?;
-    let mut remaining_amount = transaction.amount;
-    for item_id in &transaction.matched_item_ids {
-        if remaining_amount <= 0.0 {
-            break;
-        }
-        let item: Option<(i64, f64)> = tx
-            .query_row(
-                "SELECT reimbursement_id, amount FROM reimbursement_item WHERE item_id = ?1",
-                params![item_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        if let Some((batch_id, item_amount)) = item {
-            let matched_amount = remaining_amount.min(item_amount).max(0.0);
-            if matched_amount > 0.0 {
-                tx.execute(
-                    "INSERT INTO reconciliation_match(transaction_id, reimbursement_id, item_id, matched_amount, remark)
-                     VALUES(?1, ?2, ?3, ?4, '')",
-                    params![transaction.id, batch_id, item_id, matched_amount],
-                )?;
-                remaining_amount -= matched_amount;
-            }
-        }
-    }
     Ok(())
 }
 

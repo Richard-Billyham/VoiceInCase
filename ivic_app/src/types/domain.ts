@@ -14,7 +14,6 @@ export type InvoiceStatus =
 export type BatchStatus =
   | "待提交"
   | "已提交"
-  | "已报销"
   | "已到账"
   | "部分到账"
   | "异常处理"
@@ -26,12 +25,23 @@ export type InvoiceKind = "" | "普通发票" | "专用发票" | "其他发票";
 export interface ExpenseGroup {
   id: Id;
   name: string;
+  ownerId?: Id | null;
   ownerName: string;
   category: string;
   titleRule: string;
   quickSubmitTemplate: string;
   attachmentRuleConfig: string;
   color: string;
+  remark: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface PersonMember {
+  id: Id;
+  name: string;
+  phone: string;
+  email: string;
   remark: string;
   isActive: boolean;
   updatedAt: string;
@@ -59,6 +69,8 @@ export interface FormRecord {
   issueDate: string;
   groupId: Id | null;
   groupName: string;
+  memberId?: Id | null;
+  memberName?: string;
   contentType: "订单" | "发票" | "订单+发票";
   status: InvoiceStatus;
   hasInvoice: boolean;
@@ -86,6 +98,9 @@ export interface ReimbursementItem {
   amount: number;
   reconciledAmount: number;
   status: InvoiceStatus;
+  isReleased?: boolean;
+  releasedAt?: string;
+  releaseReason?: string;
   exceptionReason: string;
   remark: string;
 }
@@ -148,6 +163,7 @@ export interface Settings {
 
 export interface AppData {
   groups: ExpenseGroup[];
+  members: PersonMember[];
   forms: FormRecord[];
   batches: ReimbursementBatch[];
   transactions: ReconciliationTransaction[];

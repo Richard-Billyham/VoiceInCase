@@ -4,7 +4,7 @@ import type { PointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { ivicService } from "../../services/ivicService";
-import type { Attachment, DroppedFilePayload, ExpenseGroup, FormRecord, OcrInvoiceResult, ReimbursementBatch, UploadedAttachmentPayload } from "../../types/domain";
+import type { Attachment, DroppedFilePayload, ExpenseGroup, FormRecord, OcrInvoiceResult, PersonMember, ReimbursementBatch, UploadedAttachmentPayload } from "../../types/domain";
 import { formatMoney } from "../../utils/format";
 import { invoiceStatusOptions, validateInvoiceStatusForSave } from "../../utils/workflowRules";
 import {
@@ -41,6 +41,7 @@ import { buildBatchRecord, buildBatchRow, buildSingleRecord, type BatchRecordDra
 interface ImportDialogsProps {
   existingForms?: FormRecord[];
   groups: ExpenseGroup[];
+  members?: PersonMember[];
   initialTab?: "single" | "batch";
   initialRecord?: FormRecord | null;
   initialAttachments?: Attachment[];
@@ -69,6 +70,7 @@ interface BatchRecognitionRow extends BatchRecordDraft {
 export function ImportDialogs({
   existingForms = [],
   groups,
+  members = [],
   initialTab = "single",
   initialRecord = null,
   initialAttachments = [],
@@ -85,6 +87,7 @@ export function ImportDialogs({
     amount: initialRecord ? String(initialRecord.amount || "") : "",
     purchaseDate: initialRecord?.purchaseDate ?? "",
     groupId: initialRecord?.groupId ? String(initialRecord.groupId) : "",
+    memberId: initialRecord?.memberId ? String(initialRecord.memberId) : "",
     contentType: initialRecord?.contentType ?? "订单",
     status: initialRecord?.status ?? "待开票",
   }));
@@ -115,6 +118,11 @@ export function ImportDialogs({
   const invoiceInputRef = useRef<HTMLInputElement>(null);
   const activeInvoice = tab === "single" ? invoiceFiles[0] ?? null : null;
   const selectedGroup = groups.find((group) => String(group.id) === formDraft.groupId);
+  const selectedMember = members.find((member) => String(member.id) === formDraft.memberId);
+  const memberOptions = useMemo(
+    () => members.filter((member) => member.isActive || String(member.id) === formDraft.memberId),
+    [formDraft.memberId, members],
+  );
   const existingInvoiceAttachmentCount = initialAttachments.filter(isInvoiceAttachment).length;
   const existingAttachmentCount = initialAttachments.length;
   const batchTotal = batchRows.reduce((sum, row) => sum + row.amount, 0);
@@ -247,7 +255,14 @@ export function ImportDialogs({
 
   function patchFormDraft(patch: Partial<ImportFormDraft>) {
     markUserTouched();
-    setFormDraft((current) => applyContentTypeInference({ ...current, ...patch }, invoiceDetail));
+    setFormDraft((current) => {
+      const nextPatch = { ...patch };
+      if (Object.prototype.hasOwnProperty.call(patch, "groupId") && !Object.prototype.hasOwnProperty.call(patch, "memberId")) {
+        const group = groups.find((item) => String(item.id) === patch.groupId);
+        nextPatch.memberId = group?.ownerId ? String(group.ownerId) : "";
+      }
+      return applyContentTypeInference({ ...current, ...nextPatch }, invoiceDetail);
+    });
   }
 
   function patchInvoiceDetail(
@@ -636,6 +651,7 @@ export function ImportDialogs({
           invoiceConfirmed,
           invoiceDate,
           selectedGroup,
+          selectedMember,
           statusBatches,
         }),
         payloads,
@@ -675,7 +691,7 @@ export function ImportDialogs({
         const item = batchFiles[index];
         const row = batchRows.find((candidate) => candidate.itemId === item.id);
         const payloads = await filesToPayloads([item], "发票", "批量导入发票源文件");
-        await onCreateForm?.(buildBatchRecord(item.file, index, row, selectedGroup), payloads);
+        await onCreateForm?.(buildBatchRecord(item.file, index, row, selectedGroup, selectedMember), payloads);
       }
       baselineSnapshotRef.current = dirtySnapshot;
       onDirtyChange?.(false);
@@ -817,6 +833,13 @@ export function ImportDialogs({
                   <select value={formDraft.groupId} onChange={(event) => patchFormDraft({ groupId: event.target.value })}>
                     <option value="">不选择分组</option>
                     {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>人员</span>
+                  <select value={formDraft.memberId} onChange={(event) => patchFormDraft({ memberId: event.target.value })}>
+                    <option value="">默认负责人</option>
+                    {memberOptions.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
                   </select>
                 </label>
                 <label>
@@ -973,6 +996,13 @@ export function ImportDialogs({
             <select value={formDraft.groupId} onChange={(event) => patchFormDraft({ groupId: event.target.value })}>
               <option value="">不选择分组</option>
               {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
+          </label>
+          <label className="batch-group-select">
+            <span>人员</span>
+            <select value={formDraft.memberId} onChange={(event) => patchFormDraft({ memberId: event.target.value })}>
+              <option value="">默认负责人</option>
+              {memberOptions.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
             </select>
           </label>
           <FileDropZone

@@ -2,6 +2,7 @@ import type { AppData } from "../types/domain";
 
 export const sampleData: AppData = {
   groups: [],
+  members: [],
   forms: [],
   batches: [],
   transactions: [],

@@ -2,13 +2,14 @@ use rusqlite::{params, OptionalExtension};
 
 use crate::errors::AppResult;
 use crate::models::{
-    AppData, Attachment, BatchStatusEvent, ExpenseGroup, FormRecord, ReconciliationTransaction,
-    ReimbursementBatch, ReimbursementItem, Settings,
+    AppData, Attachment, BatchStatusEvent, ExpenseGroup, FormRecord, PersonMember,
+    ReconciliationTransaction, ReimbursementBatch, ReimbursementItem, Settings,
 };
 
 pub fn load_all(conn: &rusqlite::Connection) -> AppResult<AppData> {
     Ok(AppData {
         groups: load_groups(conn)?,
+        members: load_members(conn)?,
         forms: load_forms(conn)?,
         batches: load_batches(conn)?,
         transactions: load_transactions(conn)?,
@@ -45,24 +46,47 @@ pub fn write_settings(conn: &rusqlite::Connection, settings: &Settings) -> AppRe
     Ok(())
 }
 
+fn load_members(conn: &rusqlite::Connection) -> AppResult<Vec<PersonMember>> {
+    let mut stmt = conn.prepare(
+        "SELECT member_id, member_name, phone, email, remark, is_active, updated_at
+         FROM person_member ORDER BY is_active DESC, member_name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(PersonMember {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            phone: row.get(2)?,
+            email: row.get(3)?,
+            remark: row.get(4)?,
+            is_active: row.get::<_, i64>(5)? == 1,
+            updated_at: row.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 fn load_groups(conn: &rusqlite::Connection) -> AppResult<Vec<ExpenseGroup>> {
     let mut stmt = conn.prepare(
-        "SELECT group_id, group_name, owner_name, category, invoice_title_rule, quick_submit_template, attachment_rule_config, color, remark, is_active, updated_at
-         FROM expense_group ORDER BY is_active DESC, group_name",
+        "SELECT g.group_id, g.group_name, g.owner_id, COALESCE(NULLIF(g.owner_name, ''), pm.member_name, ''), g.category,
+                g.invoice_title_rule, g.quick_submit_template, g.attachment_rule_config, g.color, g.remark, g.is_active, g.updated_at
+         FROM expense_group g
+         LEFT JOIN person_member pm ON pm.member_id = g.owner_id
+         ORDER BY g.is_active DESC, g.group_name",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(ExpenseGroup {
             id: row.get(0)?,
             name: row.get(1)?,
-            owner_name: row.get(2)?,
-            category: row.get(3)?,
-            title_rule: row.get(4)?,
-            quick_submit_template: row.get(5)?,
-            attachment_rule_config: row.get(6)?,
-            color: row.get(7)?,
-            remark: row.get(8)?,
-            is_active: row.get::<_, i64>(9)? == 1,
-            updated_at: row.get(10)?,
+            owner_id: row.get(2)?,
+            owner_name: row.get(3)?,
+            category: row.get(4)?,
+            title_rule: row.get(5)?,
+            quick_submit_template: row.get(6)?,
+            attachment_rule_config: row.get(7)?,
+            color: row.get(8)?,
+            remark: row.get(9)?,
+            is_active: row.get::<_, i64>(10)? == 1,
+            updated_at: row.get(11)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -71,18 +95,19 @@ fn load_groups(conn: &rusqlite::Connection) -> AppResult<Vec<ExpenseGroup>> {
 fn load_forms(conn: &rusqlite::Connection) -> AppResult<Vec<FormRecord>> {
     let mut stmt = conn.prepare(
         "SELECT i.invoice_id, i.item_name, i.invoice_number, i.invoice_kind, i.amount, i.tax_amount, i.purchase_date, i.issue_date, i.content_type,
-                i.group_id, COALESCE(g.group_name, ''), i.status,
+                i.group_id, COALESCE(g.group_name, ''), i.member_id, COALESCE(NULLIF(i.member_name, ''), pm.member_name, ''), i.status,
                 i.seller_name, i.seller_tax_no, i.buyer_name, i.buyer_tax_no, i.raw_text, i.description,
                 i.spec_model, i.unit, i.quantity, COALESCE(NULLIF(i.invoice_item_name, ''), i.item_name), i.invoice_confirmed, i.updated_at,
                 COUNT(a.attachment_id)
          FROM invoice i
          LEFT JOIN expense_group g ON g.group_id = i.group_id
+         LEFT JOIN person_member pm ON pm.member_id = i.member_id
          LEFT JOIN attachment a ON a.owner_type = 'invoice' AND a.owner_id = i.invoice_id
          GROUP BY i.invoice_id
          ORDER BY i.issue_date DESC, i.invoice_id DESC",
     )?;
     let rows = stmt.query_map([], |row| {
-        let attachment_count: i64 = row.get(24)?;
+        let attachment_count: i64 = row.get(26)?;
         Ok(FormRecord {
             id: row.get(0)?,
             title: row.get(1)?,
@@ -94,23 +119,25 @@ fn load_forms(conn: &rusqlite::Connection) -> AppResult<Vec<FormRecord>> {
             issue_date: row.get(7)?,
             group_id: row.get(9)?,
             group_name: row.get(10)?,
+            member_id: row.get(11)?,
+            member_name: row.get(12)?,
             content_type: row.get(8)?,
-            status: row.get(11)?,
+            status: row.get(13)?,
             has_invoice: attachment_count > 0,
             is_matched: false,
-            invoice_confirmed: row.get::<_, i64>(22)? == 1,
+            invoice_confirmed: row.get::<_, i64>(24)? == 1,
             attachment_count,
-            seller_name: row.get(12)?,
-            seller_tax_no: row.get(13)?,
-            buyer_name: row.get(14)?,
-            buyer_tax_no: row.get(15)?,
-            invoice_item_name: row.get(21)?,
-            invoice_remark: row.get(16)?,
-            remark: row.get(17)?,
-            item_spec_model: row.get(18)?,
-            item_unit: row.get(19)?,
-            item_quantity: row.get(20)?,
-            updated_at: row.get(23)?,
+            seller_name: row.get(14)?,
+            seller_tax_no: row.get(15)?,
+            buyer_name: row.get(16)?,
+            buyer_tax_no: row.get(17)?,
+            invoice_item_name: row.get(23)?,
+            invoice_remark: row.get(18)?,
+            remark: row.get(19)?,
+            item_spec_model: row.get(20)?,
+            item_unit: row.get(21)?,
+            item_quantity: row.get(22)?,
+            updated_at: row.get(25)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -158,7 +185,7 @@ fn load_batch_items(
 ) -> AppResult<Vec<ReimbursementItem>> {
     let mut stmt = conn.prepare(
         "SELECT item_id, reimbursement_id, COALESCE(invoice_id, order_id, 0), item_name, amount,
-                reconciled_amount, status, exception_reason, remark
+                reconciled_amount, status, is_released, released_at, release_reason, exception_reason, remark
          FROM reimbursement_item WHERE reimbursement_id = ?1 ORDER BY item_id",
     )?;
     let rows = stmt.query_map(params![batch_id], |row| {
@@ -170,8 +197,11 @@ fn load_batch_items(
             amount: row.get(4)?,
             reconciled_amount: row.get(5)?,
             status: row.get(6)?,
-            exception_reason: row.get(7)?,
-            remark: row.get(8)?,
+            is_released: row.get::<_, i64>(7)? == 1,
+            released_at: row.get(8)?,
+            release_reason: row.get(9)?,
+            exception_reason: row.get(10)?,
+            remark: row.get(11)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)

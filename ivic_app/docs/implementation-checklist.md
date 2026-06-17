@@ -2,31 +2,31 @@
 
 ## PDR Coverage
 
-- [x] New code lives under `ivic_app`.
-- [x] Old `invoice_manager` is treated as read-only reference.
-- [x] React desktop shell with left navigation, top toolbar, main work area, right detail panels, and bottom status bar.
-- [x] InCase token set: warm paper background, walnut primary, dark green action color, hard borders, hard shadows.
-- [x] Dashboard statistics, amount hiding, reminders, and search result mode.
-- [x] Form management filters, selection-gated actions, sortable table, detail panel, and temporary matching mode.
-- [x] Group management card list plus right-side editable detail.
-- [x] Settings page hides server-style database configuration.
-- [x] Frontend service boundary wraps Tauri commands instead of scattering invoke calls in pages.
-- [ ] Full OCR parser.
-- [ ] School/finance export template selection.
-- [ ] Explicit Tag/Category management UI.
-- [ ] Production-grade PDF renderer.
+- [x] 新代码位于 `ivic_app` 目录下。
+- [x] 旧版 `invoice_manager` 仅作为只读参考。
+- [x] 已完成 React 桌面应用外壳，包括左侧导航、顶部工具栏、主工作区、右侧详情面板和底部状态栏。
+- [x] 已应用 InCase 视觉变量：暖纸色背景、胡桃色主色、深绿色操作色、硬边框和硬阴影。
+- [x] 已完成仪表盘统计、金额隐藏、提醒和搜索结果模式。
+- [x] 已完成表单管理筛选、基于选择的操作、可排序表格、详情面板和临时匹配模式。
+- [x] 已完成分组管理卡片列表和右侧可编辑详情。
+- [x] 设置页已隐藏服务端式数据库配置。
+- [x] 前端服务边界已封装 Tauri 命令，避免在页面中分散调用 `invoke`。
+- [ ] 完整 OCR 解析器。
+- [ ] 学校/财务导出模板选择。
+- [ ] 显式的标签/分类管理界面。
+- [ ] 生产可用级别的 PDF 渲染器。
 
 ## Backend Coverage
 
-- [x] Planned Rust command boundary for settings, forms, groups, batches, transactions, backup.
-- [x] SQLite migration scope includes PDR v2.1 core tables.
-- [x] Path-safety and backup/restore modules are part of the target structure.
-- [ ] Exhaustive migration from old PyQt SQLite data.
-- [ ] Unit tests for status aggregation and reconciliation amount rules.
+- [x] 已规划 Rust 命令边界，覆盖设置、表单、分组、批次、到账交易和备份。
+- [x] SQLite 迁移范围已包含 PDR v2.1 核心表。
+- [x] 路径安全和备份/恢复模块已纳入目标结构。
+- [ ] 从旧 PyQt SQLite 数据进行完整迁移。
+- [ ] 为状态聚合和对账金额规则补充单元测试。
 
 ## Acceptance Notes
 
-The first construction pass is a functional scaffold rather than a packaged release. Before calling a release complete, run:
+第一轮构建是可运行的功能骨架，还不是完整打包发布版本。确认发布完成前，请运行：
 
 ```bash
 npm run build
@@ -35,15 +35,15 @@ cargo test
 npm run tauri dev
 ```
 
-Then capture desktop and narrow-window screenshots for:
+然后分别截取桌面宽屏和窄窗口截图，覆盖以下页面：
 
-- Dashboard
-- Form management
-- Form matching mode
-- Single import
-- Batch import
-- Batch submission
-- Reconciliation normal mode
-- Reconciliation matching mode
-- Group management
-- Settings
+- 仪表盘
+- 表单管理
+- 表单匹配模式
+- 单条导入
+- 批量导入
+- 批次提交
+- 对账普通模式
+- 对账匹配模式
+- 分组管理
+- 设置

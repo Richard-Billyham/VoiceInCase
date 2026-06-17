@@ -6,7 +6,7 @@ import { DataTable, type Column } from "../../components/data-table/DataTable";
 import { ivicService } from "../../services/ivicService";
 import type { AppData, Attachment, BatchStatus, ReconciliationTransaction, ReimbursementBatch, ReimbursementItem, TransactionStatus, UploadedAttachmentPayload } from "../../types/domain";
 import { formatMoney, statusTone } from "../../utils/format";
-import { normalizeBatchStatus, normalizeBatchWorkflow, normalizeInvoiceStatus } from "../../utils/workflowRules";
+import { deriveBatchStatusFromItems, normalizeBatchWorkflow, normalizeInvoiceStatus } from "../../utils/workflowRules";
 import { filesToPayloads, payloadsToExistingFileItems, removeFileItem, revokeItems, toFileItems, type SelectedFileItem } from "../import/importFileUtils";
 
 interface ReconciliationPageProps {
@@ -41,7 +41,7 @@ export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
   const [editingIncome, setEditingIncome] = useState<ReconciliationTransaction | null>(null);
   const hidden = data.settings.hideAmounts;
   const allItems = useMemo(
-    () => data.batches.map(normalizeBatchWorkflow).flatMap((batch) => batch.items.map((item) => ({ ...item, batchNo: batch.no }))),
+    () => data.batches.map(normalizeBatchWorkflow).flatMap((batch) => batch.items.filter((item) => !item.isReleased).map((item) => ({ ...item, batchNo: batch.no }))),
     [data.batches],
   );
   const needle = keyword.trim().toLowerCase();
@@ -109,32 +109,24 @@ export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
     const timestamp = new Date().toLocaleString("zh-CN", { hour12: false });
     const selectedItemSet = new Set(selectedItems);
     const allocation = allocateIncome(selectedIncome.amount, selectedItemRows);
-    const matchedBatchIds = data.batches.filter((batch) => batch.items.some((item) => selectedItemSet.has(item.id))).map((batch) => batch.id);
+    const allocatedTotal = Array.from(allocation.values()).reduce((sum, value) => sum + value, 0);
+    const matchedBatchIds = data.batches.filter((batch) => batch.items.some((item) => !item.isReleased && selectedItemSet.has(item.id))).map((batch) => batch.id);
     const updatedBatches = data.batches
       .filter((batch) => matchedBatchIds.includes(batch.id))
       .map((batch) => applyIncomeToBatch(batch, allocation, selectedItemSet, selectedIncome, timestamp));
     const updatedIncome: ReconciliationTransaction = {
       ...selectedIncome,
-      status: incomeStatusForMatch(selectedIncome.amount, itemTotal),
+      status: incomeStatusForMatch(selectedIncome.amount, allocatedTotal),
       matchedBatchIds,
       matchedItemIds: selectedItems,
-      remark: appendReconciliationRemark(selectedIncome.remark, diff, timestamp),
+      remark: appendReconciliationRemark(selectedIncome.remark, selectedIncome.amount - allocatedTotal, timestamp),
     };
 
-    void persist(saveReconciliationResult(updatedBatches, updatedIncome), "到账收入对账结果已保存").then(() => {
+    void persist(ivicService.saveReconciliationResult(updatedBatches, updatedIncome), "到账收入对账结果已保存").then(() => {
       setSelectedIncomeIds([]);
       setSelectedItems([]);
       setMatchMode(false);
     });
-  }
-
-  async function saveReconciliationResult(batches: ReimbursementBatch[], income: ReconciliationTransaction) {
-    let latest: AppData = data;
-    for (const batch of batches) {
-      latest = await ivicService.saveBatch(batch);
-    }
-    latest = await ivicService.saveTransaction(income);
-    return latest;
   }
 
   return (
@@ -614,7 +606,7 @@ function applyIncomeToBatch(
 ): ReimbursementBatch {
   const items = batch.items.map((item) => {
     const status = normalizeInvoiceStatus(item.status);
-    if (!selectedItemSet.has(item.id)) {
+    if (item.isReleased || !selectedItemSet.has(item.id)) {
       return { ...item, status };
     }
     const reconciledAmount = Math.min(item.amount, item.reconciledAmount + (allocation.get(item.id) ?? 0));
@@ -624,8 +616,8 @@ function applyIncomeToBatch(
       status: reconciledAmount + 0.01 >= item.amount ? "已到账" as const : status === "报销失败" ? "报销失败" as const : "已提交" as const,
     };
   });
-  const nextStatus = deriveBatchStatusAfterReconciliation(normalizeBatchStatus(batch.status), items);
-  const changedItems = items.filter((item) => selectedItemSet.has(item.id));
+  const nextStatus = deriveBatchStatusFromItems(batch.status, items);
+  const changedItems = items.filter((item) => !item.isReleased && selectedItemSet.has(item.id));
   const allocatedTotal = changedItems.reduce((sum, item) => sum + (allocation.get(item.id) ?? 0), 0);
   return {
     ...batch,
@@ -642,26 +634,6 @@ function applyIncomeToBatch(
       },
     ],
   };
-}
-
-function deriveBatchStatusAfterReconciliation(currentStatus: BatchStatus, items: ReimbursementItem[]): BatchStatus {
-  if (currentStatus === "异常处理" || currentStatus === "已取消") {
-    return currentStatus;
-  }
-  const normalizedItems = items.map((item) => ({ ...item, status: normalizeInvoiceStatus(item.status) }));
-  if (normalizedItems.length && normalizedItems.every((item) => item.status === "已到账")) {
-    return "已到账";
-  }
-  if (normalizedItems.some((item) => item.status === "已到账" || item.reconciledAmount > 0)) {
-    return "部分到账";
-  }
-  if (normalizedItems.some((item) => item.status === "报销失败")) {
-    return "异常处理";
-  }
-  if (currentStatus === "已报销") {
-    return "已报销";
-  }
-  return normalizedItems.some((item) => item.status === "已提交") ? "已提交" : "待提交";
 }
 
 function incomeStatusForMatch(incomeAmount: number, matchedAmount: number): TransactionStatus {

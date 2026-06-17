@@ -1,5 +1,6 @@
 import type { ExpenseGroup, FormRecord, ReimbursementBatch } from "../../types/domain";
 import { formatMoney } from "../../utils/format";
+import { batchStatusDisplay } from "./batchUtils";
 
 const DEFAULT_TEMPLATE = "批次：{批次号}\n分组：{分组}\n总金额：{总金额}\n明细：\n{明细}\n备注：{备注}";
 const CONFIG_KIND = "ivic.quickSubmitConfig";
@@ -292,6 +293,7 @@ function renderQuickSubmitConfig(config: QuickSubmitConfig, batch: Reimbursement
   const batchValues = buildBatchValueMap(batch, group, hidden);
   const batchEntries: QuickCopyEntry[] = [];
   const formById = new Map(forms.map((form) => [form.id, form]));
+  const activeItems = batch.items.filter((item) => !item.isReleased);
   const itemFields = config.items.filter((item) => item.enabled && item.type === "itemField");
   config.items.forEach((item) => {
     if (!item.enabled) {
@@ -319,7 +321,7 @@ function renderQuickSubmitConfig(config: QuickSubmitConfig, batch: Reimbursement
     sections.push({ id: "batch", title: "提交批次", entries: batchEntries.filter((entry) => entry.value.trim()) });
   }
   if (itemFields.length) {
-    batch.items.forEach((item, index) => {
+    activeItems.forEach((item, index) => {
       const itemValues = buildItemValueMap(item, formById.get(item.formId), hidden);
       const entries = itemFields.map((field) => ({
         id: `${item.id}-${field.id}`,
@@ -339,15 +341,16 @@ function renderLegacyTemplate(template: string, batch: ReimbursementBatch, group
 }
 
 function buildBatchValueMap(batch: ReimbursementBatch, group?: ExpenseGroup, hidden = false) {
-  const detailLines = batch.items
+  const activeItems = batch.items.filter((item) => !item.isReleased);
+  const detailLines = activeItems
     .map((item, index) => `${index + 1}. ${item.title} ${formatMoney(item.amount, hidden)}`)
     .join("\n");
   return new Map<QuickSubmitBatchFieldKey | string, string>([
     ["batchNo", batch.no],
     ["group", batch.groupName || group?.name || "未分组"],
     ["totalAmount", formatMoney(batch.totalAmount, hidden)],
-    ["itemCount", String(batch.items.length)],
-    ["status", batch.status],
+    ["itemCount", String(activeItems.length)],
+    ["status", batchStatusDisplay(batch)],
     ["applyTime", batch.applyTime],
     ["updatedTime", batch.updatedTime],
     ["completedTime", batch.completedTime || ""],
@@ -356,8 +359,8 @@ function buildBatchValueMap(batch: ReimbursementBatch, group?: ExpenseGroup, hid
     ["批次号", batch.no],
     ["分组", batch.groupName || group?.name || "未分组"],
     ["总金额", formatMoney(batch.totalAmount, hidden)],
-    ["条目数", String(batch.items.length)],
-    ["批次状态", batch.status],
+    ["条目数", String(activeItems.length)],
+    ["批次状态", batchStatusDisplay(batch)],
     ["提交时间", batch.applyTime],
     ["修改时间", batch.updatedTime],
     ["完成时间", batch.completedTime || ""],

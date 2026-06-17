@@ -1,12 +1,11 @@
-import { RefreshCcw, Save, Trash2, X } from "lucide-react";
+import { RefreshCcw, RotateCcw, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { GroupBadge } from "../../components/ui/GroupBadge";
 import { StatusPill } from "../../components/ui/StatusPill";
 import type { BatchStatus, ExpenseGroup, FormRecord, InvoiceStatus, ReimbursementBatch } from "../../types/domain";
 import { formatMoney, statusTone } from "../../utils/format";
-import { invoiceStatusOptions } from "../../utils/workflowRules";
-import { appendBatchItemStatusEvent, appendBatchStatusEvent, batchStatusOptions, nowTimestamp } from "./batchUtils";
+import { appendBatchItemStatusEvent, appendBatchStatusEvent, batchItemStatusOptions, batchStatusDisplay, batchStatusOptions, nowTimestamp } from "./batchUtils";
 import { buildQuickSubmitCopySections, buildQuickSubmitText } from "./quickSubmitText";
 import { QuickCopyText } from "./QuickCopyText";
 
@@ -17,11 +16,14 @@ interface BatchDetailDialogProps {
   hidden: boolean;
   onClose: () => void;
   onDelete: () => void;
+  onReleaseItem: (itemId: number, targetStatus?: InvoiceStatus) => Promise<void>;
   onSave: (batch: ReimbursementBatch) => void;
 }
 
-export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDelete, onSave }: BatchDetailDialogProps) {
+export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDelete, onReleaseItem, onSave }: BatchDetailDialogProps) {
   const [draft, setDraft] = useState(() => cloneBatch(batch));
+  const [releaseError, setReleaseError] = useState("");
+  const [pendingReleaseItemId, setPendingReleaseItemId] = useState<number | null>(null);
   const groupById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups]);
   const selectedGroup = draft.groupId ? groupById.get(draft.groupId) : undefined;
 
@@ -52,7 +54,7 @@ export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDel
         if (patch.status === "已到账") {
           return { ...next, reconciledAmount: next.amount };
         }
-        if (patch.status) {
+        if (patch.status === "报销失败" && item.status === "已到账") {
           return { ...next, reconciledAmount: 0 };
         }
         return next;
@@ -78,6 +80,30 @@ export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDel
     patchBatch({ quickSubmitText: buildQuickSubmitText(draft, selectedGroup, hidden, forms) });
   }
 
+  async function confirmReleaseItem() {
+    const itemId = pendingReleaseItemId;
+    if (!itemId) {
+      return;
+    }
+    const item = draft.items.find((candidate) => candidate.id === itemId);
+    if (!item) {
+      setPendingReleaseItemId(null);
+      return;
+    }
+    if (item.reconciledAmount > 0.01 && item.status !== "报销失败") {
+      setReleaseError("该子订单已有到账记录，请先处理对账记录后再退回修改。");
+      setPendingReleaseItemId(null);
+      return;
+    }
+    try {
+      setReleaseError("");
+      await onReleaseItem(itemId, item.status);
+    } catch (error) {
+      setReleaseError(error instanceof Error ? error.message : "退回修改失败，请稍后重试。");
+      setPendingReleaseItemId(null);
+    }
+  }
+
   return (
     <section aria-modal="true" className="modal-card batch-detail-modal" role="dialog">
       <div className="batch-detail-header">
@@ -86,7 +112,7 @@ export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDel
           <h3>{draft.no}</h3>
         </div>
         <div className="batch-detail-title-actions">
-          <StatusPill value={draft.status} tone={statusTone(draft.status)} />
+          <StatusPill value={batchStatusDisplay(draft)} tone={statusTone(draft.status)} />
           <Button icon={<Trash2 size={16} />} onClick={onDelete} variant="danger">删除批次</Button>
           <Button icon={<X size={16} />} onClick={onClose}>关闭</Button>
         </div>
@@ -132,14 +158,22 @@ export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDel
               <strong>批次内订单</strong>
               <GroupBadge color={selectedGroup?.color} name={draft.groupName || "未分组"} />
             </div>
+            {releaseError && <p className="batch-release-error">{releaseError}</p>}
             {draft.items.map((item) => (
-              <div key={item.id} className="batch-child-row">
+              <div key={item.id} className={item.isReleased ? "batch-child-row released" : "batch-child-row"}>
                 <span title={item.title}>{item.title}</span>
                 <strong>{formatMoney(item.amount, hidden)}</strong>
-                <select value={item.status} onChange={(event) => patchItem(item.id, { status: event.target.value as InvoiceStatus })}>
-                  {invoiceStatusOptions.map((option) => <option key={option}>{option}</option>)}
+                <select disabled={item.isReleased} value={item.status} onChange={(event) => patchItem(item.id, { status: event.target.value as InvoiceStatus })}>
+                  {batchItemStatusOptions.map((option) => <option key={option}>{option}</option>)}
                 </select>
-                <input value={item.remark} onChange={(event) => patchItem(item.id, { remark: event.target.value })} placeholder="备注" />
+                <input disabled={item.isReleased} value={item.isReleased ? item.releaseReason || "已退回修改" : item.remark} onChange={(event) => patchItem(item.id, { remark: event.target.value })} placeholder="备注" />
+                <Button
+                  icon={<RotateCcw size={14} />}
+                  disabled={item.isReleased || item.status !== "报销失败"}
+                  onClick={() => setPendingReleaseItemId(item.id)}
+                >
+                  {item.isReleased ? "已退回" : "退回修改"}
+                </Button>
               </div>
             ))}
           </div>
@@ -169,10 +203,22 @@ export function BatchDetailDialog({ batch, forms, groups, hidden, onClose, onDel
 
       <div className="modal-actions">
         <Button onClick={onClose}>取消</Button>
-        <Button icon={<Save size={16} />} onClick={() => onSave({ ...draft, totalAmount: draft.items.reduce((sum, item) => sum + item.amount, 0) })} variant="primary">
+        <Button icon={<Save size={16} />} onClick={() => onSave({ ...draft, totalAmount: draft.items.filter((item) => !item.isReleased).reduce((sum, item) => sum + item.amount, 0) })} variant="primary">
           保存批次
         </Button>
       </div>
+      {pendingReleaseItemId !== null && (
+        <div className="modal-backdrop confirm-backdrop" role="presentation">
+          <section aria-modal="true" className="modal-card release-confirm-modal" role="dialog">
+            <h3>退回修改？</h3>
+            <p>该子订单会保留在当前批次中作为灰色历史记录，同时表单回到“待提交”，可补充材料后重新提交。</p>
+            <div className="modal-actions">
+              <Button onClick={() => setPendingReleaseItemId(null)}>取消</Button>
+              <Button icon={<RotateCcw size={16} />} onClick={() => void confirmReleaseItem()} variant="primary">确认退回</Button>
+            </div>
+          </section>
+        </div>
+      )}
     </section>
   );
 }

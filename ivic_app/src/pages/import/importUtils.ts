@@ -11,6 +11,7 @@ export interface ImportFormDraft {
   amount: string;
   purchaseDate: string;
   groupId: string;
+  memberId: string;
   contentType: FormRecord["contentType"];
   status: FormRecord["status"];
 }

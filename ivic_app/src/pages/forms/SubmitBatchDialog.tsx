@@ -3,7 +3,7 @@ import { Button } from "../../components/ui/Button";
 import { GroupBadge } from "../../components/ui/GroupBadge";
 import type { BatchStatus, ExpenseGroup, FormRecord, ReimbursementBatch } from "../../types/domain";
 import { formatMoney } from "../../utils/format";
-import { batchStatusOptions, buildSubmissionBatch, nowTimestamp } from "../batches/batchUtils";
+import { buildSubmissionBatch, initialBatchStatusOptions, nowTimestamp } from "../batches/batchUtils";
 import { buildQuickSubmitText } from "../batches/quickSubmitText";
 
 interface SubmitBatchDialogProps {
@@ -75,7 +75,7 @@ export function SubmitBatchDialog({ existingBatches = [], group, hidden, onClose
               setUpdatedTime(nowTimestamp());
             }}
           >
-            {batchStatusOptions.map((option) => <option key={option}>{option}</option>)}
+            {initialBatchStatusOptions.map((option) => <option key={option}>{option}</option>)}
           </select>
         </label>
         <label>

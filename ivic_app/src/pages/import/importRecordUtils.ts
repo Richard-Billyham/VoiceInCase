@@ -1,4 +1,4 @@
-import type { BatchImportRow, ExpenseGroup, FormRecord, ReimbursementBatch } from "../../types/domain";
+import type { BatchImportRow, ExpenseGroup, FormRecord, PersonMember, ReimbursementBatch } from "../../types/domain";
 import {
   parseInvoiceNumber,
   parseTaxAmount,
@@ -26,6 +26,7 @@ export function buildSingleRecord({
   invoiceFileName,
   invoiceText,
   selectedGroup,
+  selectedMember,
   statusBatches = [],
 }: {
   attachmentCount: number;
@@ -40,6 +41,7 @@ export function buildSingleRecord({
   invoiceFileName: string;
   invoiceText: string;
   selectedGroup?: ExpenseGroup;
+  selectedMember?: PersonMember;
   statusBatches?: ReimbursementBatch[];
 }): FormRecord {
   const now = new Date().toLocaleString("zh-CN", { hour12: false });
@@ -61,6 +63,8 @@ export function buildSingleRecord({
     issueDate: invoiceDate,
     groupId: selectedGroup?.id ?? null,
     groupName: selectedGroup?.name ?? "",
+    memberId: selectedMember?.id ?? selectedGroup?.ownerId ?? null,
+    memberName: selectedMember?.name ?? selectedGroup?.ownerName ?? "",
     contentType,
     status,
     hasInvoice,
@@ -99,7 +103,7 @@ export interface BatchRecordDraft extends BatchImportRow {
   invoiceKind?: FormRecord["invoiceKind"];
 }
 
-export function buildBatchRecord(file: File, index: number, draft?: BatchRecordDraft, selectedGroup?: ExpenseGroup): FormRecord {
+export function buildBatchRecord(file: File, index: number, draft?: BatchRecordDraft, selectedGroup?: ExpenseGroup, selectedMember?: PersonMember): FormRecord {
   const row: BatchRecordDraft = draft ?? buildBatchRow(file, index);
   const now = new Date().toLocaleString("zh-CN", { hour12: false });
   return {
@@ -113,6 +117,8 @@ export function buildBatchRecord(file: File, index: number, draft?: BatchRecordD
     issueDate: row.issueDate,
     groupId: selectedGroup?.id ?? null,
     groupName: selectedGroup?.name ?? "",
+    memberId: selectedMember?.id ?? selectedGroup?.ownerId ?? null,
+    memberName: selectedMember?.name ?? selectedGroup?.ownerName ?? "",
     contentType: "发票",
     status: row.problem ? "报销失败" : "待匹配",
     hasInvoice: true,

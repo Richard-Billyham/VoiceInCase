@@ -113,3 +113,7 @@ desktop.ini
 # Local backup of previous oversized Git history
 .git-old-heavy-history/
 .git-bad-new-history/
+
+
+manual.md
+

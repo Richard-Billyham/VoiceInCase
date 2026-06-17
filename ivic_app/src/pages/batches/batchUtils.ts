@@ -1,8 +1,16 @@
 import type { Attachment, BatchStatus, BatchStatusEvent, ExpenseGroup, FormRecord, InvoiceStatus, ReimbursementBatch } from "../../types/domain";
 import { collectAttachmentRuleBlockers, formatAttachmentRuleBlockers } from "../../utils/attachmentRules";
-import { batchStatusOptions, deriveBatchStatusFromItems, normalizeBatchStatus, normalizeBatchWorkflow, normalizeInvoiceStatus } from "../../utils/workflowRules";
+import {
+  batchItemStatusOptions,
+  batchStatusOptions,
+  deriveBatchStatusFromItems,
+  initialBatchStatusOptions,
+  normalizeBatchStatus,
+  normalizeBatchWorkflow,
+  normalizeInvoiceStatus,
+} from "../../utils/workflowRules";
 
-export { batchStatusOptions };
+export { batchItemStatusOptions, batchStatusOptions, initialBatchStatusOptions };
 
 export function nowTimestamp() {
   return new Date().toLocaleString("zh-CN", { hour12: false });
@@ -29,7 +37,7 @@ export function validateBatchSubmission(
   if (invalidStatus) {
     return `“${invalidStatus.title}”当前状态是“${invalidStatus.status}”，只有“待提交”的订单可以创建提交批次。`;
   }
-  const submitted = rows.find((row) => batches.some((batch) => batch.items.some((item) => item.formId === row.id)));
+  const submitted = rows.find((row) => batches.some((batch) => batch.items.some((item) => !item.isReleased && item.formId === row.id)));
   if (submitted) {
     return `“${submitted.title}”已经在提交批次中，请不要重复提交。`;
   }
@@ -56,6 +64,24 @@ export function normalizeBatchTimeline(batch: ReimbursementBatch): Reimbursement
   };
 }
 
+export function failedBatchItemCount(batch: Pick<ReimbursementBatch, "items">) {
+  return batch.items.filter((item) => !item.isReleased && normalizeInvoiceStatus(item.status) === "报销失败").length;
+}
+
+export function releasedBatchItemCount(batch: Pick<ReimbursementBatch, "items">) {
+  return batch.items.filter((item) => item.isReleased).length;
+}
+
+export function batchStatusDisplay(batch: Pick<ReimbursementBatch, "status" | "items">) {
+  const failedCount = failedBatchItemCount(batch);
+  const releasedCount = releasedBatchItemCount(batch);
+  return [
+    batch.status,
+    failedCount > 0 ? `${failedCount} 条失败` : "",
+    releasedCount > 0 ? `${releasedCount} 条已退回` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 export function appendBatchStatusEvent(batch: ReimbursementBatch, status: BatchStatus, remark: string) {
   const timestamp = nowTimestamp();
   const normalized = normalizeBatchTimeline(batch);
@@ -68,7 +94,7 @@ export function appendBatchStatusEvent(batch: ReimbursementBatch, status: BatchS
     statusTimeline: statusChanged
       ? [...normalized.statusTimeline, makeStatusEvent(status, remark || "状态更新", timestamp)]
       : normalized.statusTimeline,
-    items: normalized.items.map((item) => ({ ...item, status: formStatusForBatchStatus(status) })),
+    items: normalized.items.map((item) => (item.isReleased ? item : { ...item, status: formStatusForBatchStatus(status) })),
   };
 }
 
@@ -163,9 +189,6 @@ export function buildSubmissionBatch({
 
 function formStatusForBatchStatus(status: BatchStatus): InvoiceStatus {
   if (status === "已到账") {
-    return "已到账";
-  }
-  if (status === "已报销") {
     return "已到账";
   }
   if (status === "异常处理" || status === "已取消") {

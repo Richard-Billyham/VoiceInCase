@@ -17,9 +17,21 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS person_member (
+  member_id INTEGER PRIMARY KEY,
+  member_name TEXT NOT NULL UNIQUE,
+  phone TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  remark TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS expense_group (
   group_id INTEGER PRIMARY KEY,
   group_name TEXT NOT NULL UNIQUE,
+  owner_id INTEGER,
   owner_name TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT '',
   invoice_title_rule TEXT NOT NULL DEFAULT '',
@@ -29,7 +41,8 @@ CREATE TABLE IF NOT EXISTS expense_group (
   remark TEXT NOT NULL DEFAULT '',
   is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (owner_id) REFERENCES person_member(member_id)
 );
 
 CREATE TABLE IF NOT EXISTS invoice (
@@ -39,6 +52,8 @@ CREATE TABLE IF NOT EXISTS invoice (
   buyer_name TEXT NOT NULL DEFAULT '',
   buyer_tax_no TEXT NOT NULL DEFAULT '',
   group_id INTEGER,
+  member_id INTEGER,
+  member_name TEXT NOT NULL DEFAULT '',
   invoice_code TEXT NOT NULL DEFAULT '',
   invoice_number TEXT NOT NULL DEFAULT '',
   invoice_kind TEXT NOT NULL DEFAULT '',
@@ -60,7 +75,8 @@ CREATE TABLE IF NOT EXISTS invoice (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CHECK (amount >= 0),
   CHECK (tax_amount >= 0),
-  FOREIGN KEY (group_id) REFERENCES expense_group(group_id)
+  FOREIGN KEY (group_id) REFERENCES expense_group(group_id),
+  FOREIGN KEY (member_id) REFERENCES person_member(member_id)
 );
 
 CREATE TABLE IF NOT EXISTS order_item (
@@ -120,6 +136,9 @@ CREATE TABLE IF NOT EXISTS reimbursement_item (
   amount REAL NOT NULL DEFAULT 0,
   reconciled_amount REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT '待提交',
+  is_released INTEGER NOT NULL DEFAULT 0,
+  released_at TEXT NOT NULL DEFAULT '',
+  release_reason TEXT NOT NULL DEFAULT '',
   exception_reason TEXT NOT NULL DEFAULT '',
   exception_time TEXT,
   remark TEXT NOT NULL DEFAULT '',
@@ -199,9 +218,102 @@ pub fn ensure_database(app: &AppHandle) -> AppResult<()> {
 pub fn apply_schema(conn: &Connection) -> AppResult<()> {
     conn.execute_batch(SCHEMA)?;
     ensure_invoice_import_fields(conn)?;
+    ensure_member_fields(conn)?;
     ensure_group_template_fields(conn)?;
     ensure_reimbursement_timeline_fields(conn)?;
+    ensure_reimbursement_release_fields(conn)?;
+    normalize_legacy_reimbursement_statuses(conn)?;
     remove_legacy_seed_data(conn)?;
+    Ok(())
+}
+
+fn ensure_member_fields(conn: &Connection) -> AppResult<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS person_member (
+          member_id INTEGER PRIMARY KEY,
+          member_name TEXT NOT NULL UNIQUE,
+          phone TEXT NOT NULL DEFAULT '',
+          email TEXT NOT NULL DEFAULT '',
+          remark TEXT NOT NULL DEFAULT '',
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        ",
+    )?;
+    let has_group_owner_id = conn
+        .prepare("SELECT owner_id FROM expense_group LIMIT 1")
+        .is_ok();
+    if !has_group_owner_id {
+        conn.execute("ALTER TABLE expense_group ADD COLUMN owner_id INTEGER", [])?;
+    }
+    let has_invoice_member_id = conn
+        .prepare("SELECT member_id FROM invoice LIMIT 1")
+        .is_ok();
+    if !has_invoice_member_id {
+        conn.execute("ALTER TABLE invoice ADD COLUMN member_id INTEGER", [])?;
+    }
+    let has_invoice_member_name = conn
+        .prepare("SELECT member_name FROM invoice LIMIT 1")
+        .is_ok();
+    if !has_invoice_member_name {
+        conn.execute(
+            "ALTER TABLE invoice ADD COLUMN member_name TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invoice_member ON invoice(member_id)",
+        [],
+    )?;
+    Ok(())
+}
+
+fn ensure_reimbursement_release_fields(conn: &Connection) -> AppResult<()> {
+    let has_is_released = conn
+        .prepare("SELECT is_released FROM reimbursement_item LIMIT 1")
+        .is_ok();
+    if !has_is_released {
+        conn.execute(
+            "ALTER TABLE reimbursement_item ADD COLUMN is_released INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    let has_released_at = conn
+        .prepare("SELECT released_at FROM reimbursement_item LIMIT 1")
+        .is_ok();
+    if !has_released_at {
+        conn.execute(
+            "ALTER TABLE reimbursement_item ADD COLUMN released_at TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    let has_release_reason = conn
+        .prepare("SELECT release_reason FROM reimbursement_item LIMIT 1")
+        .is_ok();
+    if !has_release_reason {
+        conn.execute(
+            "ALTER TABLE reimbursement_item ADD COLUMN release_reason TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn normalize_legacy_reimbursement_statuses(conn: &Connection) -> AppResult<()> {
+    conn.execute(
+        "UPDATE reimbursement SET status = '已提交' WHERE status = '已报销'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE reimbursement_item SET status = '已提交' WHERE status = '已报销'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE invoice SET status = '已提交' WHERE status = '已报销'",
+        [],
+    )?;
     Ok(())
 }
 

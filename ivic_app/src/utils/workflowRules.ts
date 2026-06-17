@@ -2,14 +2,21 @@ import type { AppData, BatchStatus, FormRecord, InvoiceStatus, ReimbursementBatc
 
 export const invoiceStatusOptions: InvoiceStatus[] = ["待开票", "待匹配", "待提交", "批次创建", "已提交", "已到账", "报销失败"];
 
-export const batchStatusOptions: BatchStatus[] = ["待提交", "已提交", "已报销", "部分到账", "已到账", "异常处理", "已取消"];
+export const batchStatusOptions: BatchStatus[] = ["待提交", "已提交", "部分到账", "已到账", "异常处理", "已取消"];
+
+export const initialBatchStatusOptions: BatchStatus[] = ["待提交", "已提交"];
+
+export const batchItemStatusOptions: InvoiceStatus[] = ["批次创建", "已提交", "已到账", "报销失败"];
 
 export function normalizeInvoiceStatus(status: string): InvoiceStatus {
   if (status === "待开票" || status === "待匹配" || status === "待提交" || status === "批次创建" || status === "已提交" || status === "已到账" || status === "报销失败") {
     return status;
   }
-  if (status === "已报销" || status === "已完成") {
+  if (status === "已完成") {
     return "已到账";
+  }
+  if (status === "已报销") {
+    return "已提交";
   }
   if (status === "报销中" || status === "部分到账" || status === "处理中" || status === "审核中") {
     return "已提交";
@@ -21,11 +28,14 @@ export function normalizeInvoiceStatus(status: string): InvoiceStatus {
 }
 
 export function normalizeBatchStatus(status: string): BatchStatus {
-  if (status === "待提交" || status === "已提交" || status === "已报销" || status === "已到账" || status === "部分到账" || status === "异常处理" || status === "已取消") {
+  if (status === "待提交" || status === "已提交" || status === "已到账" || status === "部分到账" || status === "异常处理" || status === "已取消") {
     return status;
   }
   if (status === "已完成") {
     return "已到账";
+  }
+  if (status === "已报销") {
+    return "已提交";
   }
   if (status === "异常结项" || status === "需处理") {
     return "异常处理";
@@ -50,7 +60,7 @@ export function normalizeBatchWorkflow(batch: ReimbursementBatch): Reimbursement
 export function normalizeFormWorkflow(form: FormRecord, batches: ReimbursementBatch[]): FormRecord {
   const batchItem = batches
     .flatMap((batch) => batch.items.map((item) => ({ batch, item })))
-    .find(({ item }) => item.formId === form.id);
+    .find(({ item }) => !item.isReleased && item.formId === form.id);
   const normalizedStatus = normalizeInvoiceStatus(form.status);
   const status = form.contentType === "订单+发票" && batchItem
     ? formStatusForBatchItem(batchItem.batch, batchItem.item, normalizedStatus)
@@ -96,7 +106,7 @@ export function defaultInvoiceStatusForContent(contentType: FormRecord["contentT
 
 export function validateInvoiceStatusForSave(form: Pick<FormRecord, "contentType" | "id" | "status">, batches: ReimbursementBatch[] = []) {
   const status = normalizeInvoiceStatus(form.status);
-  const inBatch = batches.some((batch) => batch.items.some((item) => item.formId === form.id));
+  const inBatch = batches.some((batch) => batch.items.some((item) => !item.isReleased && item.formId === form.id));
   if (form.contentType === "订单" && status !== "待开票" && status !== "报销失败") {
     return "单独订单只能保存为“待开票”或“报销失败”。";
   }
@@ -109,25 +119,24 @@ export function validateInvoiceStatusForSave(form: Pick<FormRecord, "contentType
   return "";
 }
 
-export function deriveBatchStatusFromItems(status: BatchStatus, items: Array<Pick<ReimbursementBatch["items"][number], "status">>): BatchStatus {
+export function deriveBatchStatusFromItems(
+  status: BatchStatus,
+  items: Array<Pick<ReimbursementBatch["items"][number], "status"> & Partial<Pick<ReimbursementBatch["items"][number], "reconciledAmount" | "isReleased">>>,
+): BatchStatus {
   const normalizedStatus = normalizeBatchStatus(status);
-  const normalizedItems = items.map((item) => normalizeInvoiceStatus(item.status));
+  const activeItems = items.filter((item) => !item.isReleased);
+  const normalizedItems = activeItems.map((item) => normalizeInvoiceStatus(item.status));
+  const hasReconciledAmount = activeItems.some((item) => Number(item.reconciledAmount ?? 0) > 0);
   const itemCount = normalizedItems.length;
   if (normalizedStatus === "已取消" || itemCount === 0) {
     return normalizedStatus;
-  }
-  if (normalizedItems.some((itemStatus) => itemStatus === "报销失败")) {
-    return "异常处理";
   }
   const paidCount = normalizedItems.filter((itemStatus) => itemStatus === "已到账").length;
   if (paidCount === itemCount) {
     return "已到账";
   }
-  if (paidCount > 0 || normalizedStatus === "部分到账") {
+  if (paidCount > 0 || hasReconciledAmount || normalizedStatus === "部分到账") {
     return "部分到账";
-  }
-  if (normalizedStatus === "已报销") {
-    return "已报销";
   }
   if (normalizedItems.some((itemStatus) => itemStatus === "已提交")) {
     return "已提交";
@@ -154,9 +163,6 @@ function formStatusForBatchItem(
   const batchStatus = normalizeBatchStatus(batch.status);
   const itemStatus = normalizeInvoiceStatus(item.status);
   if (batchStatus === "已到账" || itemStatus === "已到账") {
-    return "已到账";
-  }
-  if (batchStatus === "已报销") {
     return "已到账";
   }
   if (batchStatus === "异常处理" || batchStatus === "已取消" || itemStatus === "报销失败") {

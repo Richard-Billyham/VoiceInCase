@@ -10,6 +10,9 @@ interface SettingsPageProps {
   persist: (action: Promise<AppData>, message: string) => Promise<void>;
 }
 
+const APP_VERSION_LABEL = "v2.1.0-beta";
+const APP_VERSION_UPDATED_AT = "2026-06-17";
+
 export function SettingsPage({ data, persist }: SettingsPageProps) {
   const [draft, setDraft] = useState<Settings>(data.settings);
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -125,7 +128,7 @@ export function SettingsPage({ data, persist }: SettingsPageProps) {
           <Info size={22} />
         </div>
         <div className="about-box">
-          <strong>InVoice InCase v2.1.0-beta</strong>
+          <strong>InVoice InCase {APP_VERSION_LABEL}</strong>
           <span className="developer-links">
             开发者
             <a
@@ -156,7 +159,10 @@ export function SettingsPage({ data, persist }: SettingsPageProps) {
             <Button icon={<RefreshCw size={16} />} onClick={checkUpdates} disabled={updateChecking}>
               {updateChecking ? "检测中" : "检测更新"}
             </Button>
-            <small>当前版本：v2.1.0-beta</small>
+            <span className="settings-version-meta">
+              <small>当前版本：{APP_VERSION_LABEL}</small>
+              <small>最近更新时间：{APP_VERSION_UPDATED_AT}</small>
+            </span>
           </div>
         </div>
       </section>

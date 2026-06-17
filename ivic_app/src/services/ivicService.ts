@@ -6,14 +6,16 @@ import type {
   DroppedFilePayload,
   ExpenseGroup,
   FormRecord,
+  InvoiceStatus,
   OcrInvoiceResult,
+  PersonMember,
   ReimbursementBatch,
   ReimbursementItem,
   ReconciliationTransaction,
   Settings,
   UploadedAttachmentPayload,
 } from "../types/domain";
-import { normalizeBatchStatus, normalizeInvoiceStatus } from "../utils/workflowRules";
+import { deriveBatchStatusFromItems, normalizeBatchStatus, normalizeInvoiceStatus } from "../utils/workflowRules";
 
 const STORE_KEY = "ivic-app-data-v2.1";
 
@@ -67,9 +69,10 @@ export const ivicService = {
       return invoke<AppData>("save_form_record", { record });
     }
     const data = readLocalData();
-    const exists = data.forms.some((item) => item.id === record.id);
-    data.forms = exists ? data.forms.map((item) => (item.id === record.id ? record : item)) : [record, ...data.forms];
-    data.batches = syncBatchesForForm(data.batches, record);
+    const nextRecord = resolveFormMember(record, data);
+    const exists = data.forms.some((item) => item.id === nextRecord.id);
+    data.forms = exists ? data.forms.map((item) => (item.id === nextRecord.id ? nextRecord : item)) : [nextRecord, ...data.forms];
+    data.batches = syncBatchesForForm(data.batches, nextRecord);
     return writeLocalData(data);
   },
 
@@ -78,22 +81,23 @@ export const ivicService = {
       return invoke<AppData>("save_form_with_attachments", { record, attachments });
     }
     const data = readLocalData();
+    const resolvedRecord = resolveFormMember(record, data);
     const uploadedAt = new Date().toLocaleString("zh-CN", { hour12: false });
     const nextAttachments: Attachment[] = attachments.map((attachment, index) => ({
       id: Date.now() + index,
       ownerType: "invoice",
-      ownerId: record.id,
+      ownerId: resolvedRecord.id,
       fileName: attachment.fileName,
       fileType: attachment.fileType,
-      relativePath: `browser/imports/${record.id}/${attachment.fileName}`,
+      relativePath: `browser/imports/${resolvedRecord.id}/${attachment.fileName}`,
       remark: attachment.remark,
       uploadedAt,
     }));
-    const existingCount = data.attachments.filter((item) => item.ownerType === "invoice" && item.ownerId === record.id).length;
+    const existingCount = data.attachments.filter((item) => item.ownerType === "invoice" && item.ownerId === resolvedRecord.id).length;
     const nextRecord = {
-      ...record,
+      ...resolvedRecord,
       attachmentCount: existingCount + nextAttachments.length,
-      hasInvoice: record.hasInvoice || nextAttachments.some((item) => item.fileType === "发票"),
+      hasInvoice: resolvedRecord.hasInvoice || nextAttachments.some((item) => item.fileType === "发票"),
     };
     const exists = data.forms.some((item) => item.id === nextRecord.id);
     data.forms = exists ? data.forms.map((item) => (item.id === nextRecord.id ? nextRecord : item)) : [nextRecord, ...data.forms];
@@ -123,19 +127,21 @@ export const ivicService = {
         if (!match) {
           return form;
         }
+        const matchedOrder = resolveFormMember(match.matchedOrder, data);
         return {
-          ...match.matchedOrder,
+          ...matchedOrder,
           attachmentCount: data.attachments.filter((attachment) => attachment.ownerType === "invoice" && attachment.ownerId === match.order.id).length,
         };
       });
     for (const match of matches) {
+      const matchedOrder = resolveFormMember(match.matchedOrder, data);
       if (!data.forms.some((form) => form.id === match.order.id)) {
         data.forms.unshift({
-          ...match.matchedOrder,
+          ...matchedOrder,
           attachmentCount: data.attachments.filter((attachment) => attachment.ownerType === "invoice" && attachment.ownerId === match.order.id).length,
         });
       }
-      data.batches = syncBatchesForForm(data.batches, match.matchedOrder);
+      data.batches = syncBatchesForForm(data.batches, matchedOrder);
     }
     return writeLocalData(data);
   },
@@ -192,7 +198,7 @@ export const ivicService = {
     const data = readLocalData();
     const blocker = data.batches
       .flatMap((batch) => batch.items.map((item) => ({ batch, item })))
-      .find(({ item }) => ids.includes(item.formId));
+      .find(({ item }) => !item.isReleased && ids.includes(item.formId));
     if (blocker) {
       const form = data.forms.find((item) => item.id === blocker.item.formId);
       throw new Error(`订单 ${form?.title ?? blocker.item.title} 已在报销批次 ${blocker.batch.no} 中。请先删除对应报销批次，再删除订单。`);
@@ -206,8 +212,78 @@ export const ivicService = {
       return invoke<AppData>("save_group", { group });
     }
     const data = readLocalData();
+    const owner = group.ownerId ? data.members.find((member) => member.id === group.ownerId) : null;
+    const nextGroup = { ...group, ownerName: owner?.name ?? group.ownerName };
     const exists = data.groups.some((item) => item.id === group.id);
-    data.groups = exists ? data.groups.map((item) => (item.id === group.id ? group : item)) : [...data.groups, group];
+    data.groups = exists ? data.groups.map((item) => (item.id === group.id ? nextGroup : item)) : [...data.groups, nextGroup];
+    return writeLocalData(data);
+  },
+
+  async deleteGroup(id: number): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("delete_group", { id });
+    }
+    const data = readLocalData();
+    const timestamp = new Date().toLocaleString("zh-CN", { hour12: false });
+    data.groups = data.groups.filter((group) => group.id !== id);
+    data.forms = data.forms.map((form) => (
+      form.groupId === id
+        ? { ...form, groupId: null, groupName: "", memberId: null, memberName: "", updatedAt: timestamp }
+        : form
+    ));
+    data.batches = data.batches.map((batch) => (
+      batch.groupId === id
+        ? {
+            ...batch,
+            groupId: null,
+            groupName: "未分组",
+            updatedTime: timestamp,
+            items: batch.items.map((item) => ({ ...item })),
+          }
+        : batch
+    ));
+    return writeLocalData(data);
+  },
+
+  async saveMember(member: PersonMember): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("save_member", { member });
+    }
+    const name = member.name.trim();
+    if (!name) {
+      throw new Error("人员名字不能为空。");
+    }
+    const data = readLocalData();
+    const nextMember = { ...member, name, updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }) };
+    const exists = data.members.some((item) => item.id === member.id);
+    data.members = exists ? data.members.map((item) => (item.id === member.id ? nextMember : item)) : [...data.members, nextMember];
+    data.groups = data.groups.map((group) => (group.ownerId === member.id ? { ...group, ownerName: name } : group));
+    data.forms = data.forms.map((form) => (form.memberId === member.id ? { ...form, memberName: name } : form));
+    return writeLocalData(data);
+  },
+
+  async deleteMember(id: number): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("delete_member", { id });
+    }
+    const data = readLocalData();
+    const timestamp = new Date().toLocaleString("zh-CN", { hour12: false });
+    data.members = data.members.filter((member) => member.id !== id);
+    data.groups = data.groups.map((group) => (
+      group.ownerId === id ? { ...group, ownerId: null, ownerName: "", updatedAt: timestamp } : group
+    ));
+    data.forms = data.forms.map((form) => {
+      if (form.memberId !== id) {
+        return form;
+      }
+      const group = form.groupId ? data.groups.find((item) => item.id === form.groupId) : null;
+      return {
+        ...form,
+        memberId: group?.ownerId ?? null,
+        memberName: group?.ownerName ?? "",
+        updatedAt: timestamp,
+      };
+    });
     return writeLocalData(data);
   },
 
@@ -222,7 +298,7 @@ export const ivicService = {
     }
     data.batches = exists ? data.batches.map((item) => (item.id === batch.id ? batch : item)) : [batch, ...data.batches];
     data.forms = data.forms.map((form) => {
-      const item = batch.items.find((candidate) => candidate.formId === form.id);
+      const item = batch.items.find((candidate) => !candidate.isReleased && candidate.formId === form.id);
       return item ? { ...form, status: statusForBatchItem(batch, item), updatedAt: batch.updatedTime } : form;
     });
     return writeLocalData(data);
@@ -234,9 +310,71 @@ export const ivicService = {
     }
     const data = readLocalData();
     const batch = data.batches.find((item) => item.id === id);
-    const formIds = new Set(batch?.items.map((item) => item.formId) ?? []);
+    const formIds = new Set(batch?.items.filter((item) => !item.isReleased).map((item) => item.formId) ?? []);
     data.batches = data.batches.filter((item) => item.id !== id);
     data.forms = data.forms.map((form) => (formIds.has(form.id) ? { ...form, status: "待提交", updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }) } : form));
+    return writeLocalData(data);
+  },
+
+  async releaseBatchItemForRetry(batchId: number, itemId: number, targetStatus?: ReimbursementItem["status"]): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("release_batch_item_for_retry", { batchId, itemId, targetStatus: targetStatus ?? null });
+    }
+    const data = readLocalData();
+    const batch = data.batches.find((item) => item.id === batchId);
+    const item = batch?.items.find((candidate) => candidate.id === itemId);
+    if (!batch || !item) {
+      throw new Error("该子订单不在当前批次中，无法退回修改。");
+    }
+    const wantsFailure = targetStatus ? normalizeInvoiceStatus(targetStatus) === "报销失败" : false;
+    if (normalizeInvoiceStatus(item.status) !== "报销失败" && !wantsFailure) {
+      throw new Error("只有报销失败的子订单可以退回修改。");
+    }
+    const hasReconciliationMatch = data.transactions.some((transaction) => transaction.matchedItemIds.includes(itemId));
+    if (item.reconciledAmount > 0.01 && hasReconciliationMatch) {
+      throw new Error("该子订单已有到账记录，请先处理对账记录后再退回修改。");
+    }
+    const timestamp = new Date().toLocaleString("zh-CN", { hour12: false });
+    const failedStatus: InvoiceStatus = "报销失败";
+    const nextItems: ReimbursementItem[] = batch.items.map((candidate) => {
+      if (candidate.id !== itemId) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        status: failedStatus,
+        reconciledAmount: 0,
+        isReleased: true,
+        releasedAt: timestamp,
+        releaseReason: "报销失败退回修改",
+        remark: [candidate.remark.trim(), "已退回修改"].filter(Boolean).join("；"),
+      };
+    });
+    const activeItems = nextItems.filter((candidate) => !candidate.isReleased);
+    const nextStatus = activeItems.length ? deriveBatchStatusFromItems(batch.status, nextItems) : "已取消" as const;
+    data.batches = data.batches.map((candidate) => {
+      if (candidate.id !== batchId) {
+        return candidate;
+      }
+      return {
+        ...candidate,
+        items: nextItems,
+        totalAmount: activeItems.reduce((sum, nextItem) => sum + nextItem.amount, 0),
+        status: nextStatus,
+        updatedTime: timestamp,
+        completedTime: activeItems.length ? candidate.completedTime : timestamp,
+        statusTimeline: [
+          ...candidate.statusTimeline,
+          {
+            status: candidate.status,
+            timestamp,
+            remark: `子订单“${item.title}”因报销失败退回修改，释放金额 ${item.amount.toFixed(2)}，表单回到待提交。`,
+          },
+          ...(activeItems.length ? [] : [{ status: "已取消" as const, timestamp, remark: "所有子订单已释放，批次自动取消。" }]),
+        ],
+      };
+    });
+    data.forms = data.forms.map((form) => (form.id === item.formId ? { ...form, status: "待提交", updatedAt: timestamp } : form));
     return writeLocalData(data);
   },
 
@@ -245,6 +383,28 @@ export const ivicService = {
       return invoke<AppData>("save_transaction", { transaction });
     }
     const data = readLocalData();
+    const attachmentCount = data.attachments.filter((item) => item.ownerType === "transaction" && item.ownerId === transaction.id).length;
+    const nextTransaction = { ...transaction, attachmentCount };
+    const exists = data.transactions.some((item) => item.id === transaction.id);
+    data.transactions = exists
+      ? data.transactions.map((item) => (item.id === transaction.id ? nextTransaction : item))
+      : [nextTransaction, ...data.transactions];
+    return writeLocalData(data);
+  },
+
+  async saveReconciliationResult(batches: ReimbursementBatch[], transaction: ReconciliationTransaction): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("save_reconciliation_result", { batches, transaction });
+    }
+    let data = readLocalData();
+    for (const batch of batches) {
+      const exists = data.batches.some((item) => item.id === batch.id);
+      data.batches = exists ? data.batches.map((item) => (item.id === batch.id ? batch : item)) : [batch, ...data.batches];
+      data.forms = data.forms.map((form) => {
+        const item = batch.items.find((candidate) => !candidate.isReleased && candidate.formId === form.id);
+        return item ? { ...form, status: statusForBatchItem(batch, item), updatedAt: batch.updatedTime } : form;
+      });
+    }
     const attachmentCount = data.attachments.filter((item) => item.ownerType === "transaction" && item.ownerId === transaction.id).length;
     const nextTransaction = { ...transaction, attachmentCount };
     const exists = data.transactions.some((item) => item.id === transaction.id);
@@ -334,9 +494,6 @@ function statusForBatchItem(batch: ReimbursementBatch, item: ReimbursementItem) 
   if (status === "已到账" || itemStatus === "已到账") {
     return "已到账" as const;
   }
-  if (status === "已报销") {
-    return "已到账" as const;
-  }
   if (status === "异常处理" || status === "已取消" || itemStatus === "报销失败") {
     return "报销失败" as const;
   }
@@ -348,17 +505,16 @@ function statusForBatchItem(batch: ReimbursementBatch, item: ReimbursementItem) 
 
 function syncBatchesForForm(batches: ReimbursementBatch[], form: FormRecord) {
   return batches.map((batch) => {
-    if (!batch.items.some((item) => item.formId === form.id)) {
+    if (!batch.items.some((item) => !item.isReleased && item.formId === form.id)) {
       return batch;
     }
     const items = batch.items.map((item) => {
-      if (item.formId !== form.id) {
+      if (item.isReleased || item.formId !== form.id) {
         return item;
       }
       return {
         ...item,
         status: form.status === "待提交" ? "批次创建" : form.status,
-        reconciledAmount: 0,
       };
     });
     return {
@@ -370,37 +526,41 @@ function syncBatchesForForm(batches: ReimbursementBatch[], form: FormRecord) {
   });
 }
 
-function deriveBatchStatusFromItems(currentStatus: ReimbursementBatch["status"], items: ReimbursementItem[]) {
-  const status = normalizeBatchStatus(currentStatus);
-  const normalizedItems = items.map((item) => ({ ...item, status: normalizeInvoiceStatus(item.status) }));
-  if (status === "异常处理" || status === "已取消") {
-    return status;
+function resolveFormMember(record: FormRecord, data: AppData): FormRecord {
+  const explicitMember = record.memberId ? data.members.find((member) => member.id === record.memberId) : null;
+  if (explicitMember) {
+    return { ...record, memberId: explicitMember.id, memberName: explicitMember.name };
   }
-  if (normalizedItems.length && normalizedItems.every((item) => item.status === "已到账")) {
-    return "已到账" as const;
+  if (record.memberName?.trim()) {
+    return { ...record, memberId: record.memberId ?? null, memberName: record.memberName.trim() };
   }
-  if (normalizedItems.some((item) => item.status === "已到账")) {
-    return "部分到账" as const;
-  }
-  if (normalizedItems.some((item) => item.status === "报销失败")) {
-    return "异常处理" as const;
-  }
-  if (status === "已报销") {
-    return "已报销" as const;
-  }
-  if (normalizedItems.some((item) => item.status === "已提交")) {
-    return "已提交" as const;
-  }
-  return "待提交" as const;
+  const group = record.groupId ? data.groups.find((item) => item.id === record.groupId) : null;
+  return {
+    ...record,
+    memberId: group?.ownerId ?? null,
+    memberName: group?.ownerName ?? "",
+  };
 }
 
 function normalizeLocalData(data: AppData): AppData {
   const attachments = data.attachments ?? [];
+  const members = (data.members ?? []).map((member) => ({
+    ...member,
+    phone: member.phone ?? "",
+    email: member.email ?? "",
+    remark: member.remark ?? "",
+    isActive: typeof member.isActive === "boolean" ? member.isActive : true,
+    updatedAt: member.updatedAt || "",
+  }));
+  const memberById = new Map(members.map((member) => [member.id, member]));
   return {
     ...data,
     attachments,
+    members,
     groups: data.groups.map((group) => ({
       ...group,
+      ownerId: group.ownerId ?? null,
+      ownerName: group.ownerId && memberById.has(group.ownerId) ? memberById.get(group.ownerId)!.name : group.ownerName || "",
       quickSubmitTemplate: group.quickSubmitTemplate || "",
       attachmentRuleConfig: group.attachmentRuleConfig || "",
     })),
@@ -408,6 +568,8 @@ function normalizeLocalData(data: AppData): AppData {
       ...form,
       invoiceKind: form.invoiceKind || "",
       status: normalizeInvoiceStatus(form.status),
+      memberId: form.memberId ?? null,
+      memberName: form.memberId && memberById.has(form.memberId) ? memberById.get(form.memberId)!.name : form.memberName || "",
       invoiceConfirmed: typeof form.invoiceConfirmed === "boolean" ? form.invoiceConfirmed : !form.hasInvoice,
       attachmentCount: attachments.filter((attachment) => attachment.ownerType === "invoice" && attachment.ownerId === form.id).length || form.attachmentCount || 0,
     })),
@@ -417,6 +579,9 @@ function normalizeLocalData(data: AppData): AppData {
       items: batch.items.map((item) => ({
         ...item,
         status: normalizeInvoiceStatus(item.status),
+        isReleased: Boolean(item.isReleased),
+        releasedAt: item.releasedAt ?? "",
+        releaseReason: item.releaseReason ?? "",
       })),
     })),
     transactions: (data.transactions ?? []).map((transaction) => ({

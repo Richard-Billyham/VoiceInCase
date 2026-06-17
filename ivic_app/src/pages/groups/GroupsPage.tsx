@@ -1,9 +1,9 @@
-import { GripVertical, Plus, Save, Search, Trash2 } from "lucide-react";
-import type { PointerEvent } from "react";
+import { GripVertical, Plus, Save, Search, Trash2, UserRound, UsersRound } from "lucide-react";
+import type { MouseEvent, PointerEvent } from "react";
 import { useMemo, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { ivicService } from "../../services/ivicService";
-import type { AppData, ExpenseGroup } from "../../types/domain";
+import type { AppData, ExpenseGroup, PersonMember } from "../../types/domain";
 import {
   createAttachmentRule,
   parseAttachmentRuleConfig,
@@ -61,11 +61,23 @@ interface QuickSubmitDropMarkerStyle {
   y: number;
 }
 
+interface DeleteTarget {
+  type: "group" | "member";
+  id: number;
+  name: string;
+  summary: string;
+}
+
 export function GroupsPage({ data, persist }: GroupsPageProps) {
   const [keyword, setKeyword] = useState("");
+  const [viewMode, setViewMode] = useState<"groups" | "members">("groups");
+  const members = data.members ?? [];
   const [activeId, setActiveId] = useState(data.groups[0]?.id ?? 0);
+  const [activeMemberId, setActiveMemberId] = useState(members[0]?.id ?? 0);
   const activeGroup = data.groups.find((group) => group.id === activeId) ?? data.groups[0];
+  const activeMember = members.find((member) => member.id === activeMemberId) ?? members[0];
   const [draft, setDraft] = useState<ExpenseGroup | null>(activeGroup ?? null);
+  const [memberDraft, setMemberDraft] = useState<PersonMember | null>(activeMember ?? null);
   const [quickSubmitDrag, setQuickSubmitDrag] = useState<QuickSubmitDragState | null>(null);
   const quickSubmitDragRef = useRef<QuickSubmitDragState | null>(null);
   const quickSubmitDragPreviewRef = useRef<HTMLDivElement | null>(null);
@@ -73,11 +85,20 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
   const quickSubmitDropTargetsRef = useRef<QuickSubmitDropTarget[]>([]);
   const quickSubmitDragFrameRef = useRef<number | null>(null);
   const quickSubmitPendingPositionRef = useRef<QuickSubmitDragPosition | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<DeleteTarget | null>(null);
 
   const filteredGroups = useMemo(() => {
     const needle = keyword.trim().toLowerCase();
     return data.groups.filter((group) => !needle || [group.name, group.ownerName, group.category, group.titleRule].join(" ").toLowerCase().includes(needle));
   }, [data.groups, keyword]);
+  const filteredMembers = useMemo(() => {
+    const needle = keyword.trim().toLowerCase();
+    return members.filter((member) => !needle || [member.name, member.phone, member.email, member.remark].join(" ").toLowerCase().includes(needle));
+  }, [members, keyword]);
+  const ownerOptions = useMemo(
+    () => members.filter((member) => member.isActive || member.id === draft?.ownerId),
+    [draft?.ownerId, members],
+  );
   const quickSubmitConfig = useMemo(
     () => parseQuickSubmitConfig(draft?.quickSubmitTemplate ?? ""),
     [draft?.quickSubmitTemplate],
@@ -93,6 +114,11 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
   function selectGroup(group: ExpenseGroup) {
     setActiveId(group.id);
     setDraft(group);
+  }
+
+  function selectMember(member: PersonMember) {
+    setActiveMemberId(member.id);
+    setMemberDraft(member);
   }
 
   function addGroup() {
@@ -113,11 +139,81 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
     setDraft(next);
   }
 
+  function addMember() {
+    const next: PersonMember = {
+      id: Date.now(),
+      name: "新人员",
+      phone: "",
+      email: "",
+      remark: "",
+      isActive: true,
+      updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+    };
+    setActiveMemberId(next.id);
+    setMemberDraft(next);
+  }
+
   function updateDraft(patch: Partial<ExpenseGroup>) {
     if (!draft) {
       return;
     }
     setDraft({ ...draft, ...patch, updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }) });
+  }
+
+  function updateMemberDraft(patch: Partial<PersonMember>) {
+    if (!memberDraft) {
+      return;
+    }
+    setMemberDraft({ ...memberDraft, ...patch, updatedAt: new Date().toLocaleString("zh-CN", { hour12: false }) });
+  }
+
+  function updateGroupOwner(ownerIdValue: string) {
+    const ownerId = ownerIdValue ? Number(ownerIdValue) : null;
+    const owner = members.find((member) => member.id === ownerId);
+    updateDraft({ ownerId, ownerName: owner?.name ?? "" });
+  }
+
+  function requestDeleteGroup(event: MouseEvent<HTMLButtonElement>, group: ExpenseGroup) {
+    event.stopPropagation();
+    const formCount = data.forms.filter((form) => form.groupId === group.id).length;
+    const batchCount = data.batches.filter((batch) => batch.groupId === group.id).length;
+    setPendingDelete({
+      type: "group",
+      id: group.id,
+      name: group.name,
+      summary: `关联的 ${formCount} 条订单和 ${batchCount} 个批次会保留，并改回未分组/默认人员。`,
+    });
+  }
+
+  function requestDeleteMember(event: MouseEvent<HTMLButtonElement>, member: PersonMember) {
+    event.stopPropagation();
+    const groupCount = data.groups.filter((group) => group.ownerId === member.id).length;
+    const formCount = data.forms.filter((form) => form.memberId === member.id).length;
+    setPendingDelete({
+      type: "member",
+      id: member.id,
+      name: member.name,
+      summary: `关联的 ${groupCount} 个分组会清空负责人，${formCount} 条订单会回到对应分组负责人或默认人员。`,
+    });
+  }
+
+  async function confirmDeleteTarget() {
+    if (!pendingDelete) {
+      return;
+    }
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (target.type === "group") {
+      const nextGroup = data.groups.find((group) => group.id !== target.id) ?? null;
+      setActiveId(nextGroup?.id ?? 0);
+      setDraft(nextGroup);
+      await persist(ivicService.deleteGroup(target.id), "分组已删除，相关数据已回到默认值");
+      return;
+    }
+    const nextMember = members.find((member) => member.id !== target.id) ?? null;
+    setActiveMemberId(nextMember?.id ?? 0);
+    setMemberDraft(nextMember);
+    await persist(ivicService.deleteMember(target.id), "人员已删除，相关数据已回到默认值");
   }
 
   function updateQuickSubmitConfig(config: QuickSubmitConfig) {
@@ -457,28 +553,106 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
   return (
     <div className="groups-layout">
       <aside className="group-list-panel">
+        <div className="group-mode-switch" role="tablist" aria-label="管理类型">
+          <button className={viewMode === "groups" ? "active" : ""} onClick={() => setViewMode("groups")} type="button">
+            <UsersRound size={15} />
+            分组
+          </button>
+          <button className={viewMode === "members" ? "active" : ""} onClick={() => setViewMode("members")} type="button">
+            <UserRound size={15} />
+            人员
+          </button>
+        </div>
         <label className="field-with-icon">
           <Search size={16} />
-          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索分组、负责人、抬头规则" />
+          <input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder={viewMode === "groups" ? "搜索分组、负责人、抬头规则" : "搜索人员、电话、邮箱"} />
         </label>
         <div className="group-card-list">
-          {filteredGroups.map((group) => (
-            <button key={group.id} className={group.id === activeId ? "group-card active" : "group-card"} onClick={() => selectGroup(group)} type="button">
-              <i style={{ background: group.color }} />
-              <strong>{group.name}</strong>
-              <span>{group.ownerName || "未设置负责人"} · {group.category || "未分类"}</span>
-              <small>{group.titleRule || "暂无发票抬头规则"}</small>
-            </button>
-          ))}
-          <button className="group-card add-card" onClick={addGroup} type="button">
-            <Plus size={20} />
-            <strong>新增分组卡片</strong>
-            <span>用于负责人、场景和抬头识别</span>
-          </button>
+          {viewMode === "groups" ? (
+            <>
+              {filteredGroups.map((group) => (
+                <div key={group.id} className="group-card-shell">
+                  <button className={group.id === activeId ? "group-card active" : "group-card"} onClick={() => selectGroup(group)} type="button">
+                    <i style={{ background: group.color }} />
+                    <strong>{group.name}</strong>
+                    <span>{group.ownerName || "未设置负责人"} · {group.category || "未分类"}</span>
+                    <small>{group.titleRule || "暂无发票抬头规则"}</small>
+                  </button>
+                  <button aria-label={`删除分组 ${group.name}`} className="group-card-delete" onClick={(event) => requestDeleteGroup(event, group)} type="button">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+              <button className="group-card add-card" onClick={addGroup} type="button">
+                <Plus size={20} />
+                <strong>新增分组卡片</strong>
+                <span>用于负责人、场景和抬头识别</span>
+              </button>
+            </>
+          ) : (
+            <>
+              {filteredMembers.map((member) => (
+                <div key={member.id} className="group-card-shell">
+                  <button className={member.id === activeMemberId ? "group-card member-card active" : "group-card member-card"} onClick={() => selectMember(member)} type="button">
+                    <i style={{ background: memberColor(member.id) }} />
+                    <strong>{member.name}</strong>
+                    <span>{member.phone || "未填电话"} · {member.email || "未填邮箱"}</span>
+                    <small>{member.remark || "暂无备注"}</small>
+                  </button>
+                  <button aria-label={`删除人员 ${member.name}`} className="group-card-delete" onClick={(event) => requestDeleteMember(event, member)} type="button">
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              ))}
+              <button className="group-card add-card" onClick={addMember} type="button">
+                <Plus size={20} />
+                <strong>新增人员卡片</strong>
+                <span>用于负责人和订单人员选择</span>
+              </button>
+            </>
+          )}
         </div>
       </aside>
 
       <section className="work-panel group-detail-panel">
+        {viewMode === "members" ? (
+          <>
+            <div className="panel-heading">
+              <div>
+                <span className="section-kicker">人员详情</span>
+                <h3>{memberDraft?.name ?? "请选择人员"}</h3>
+              </div>
+              <Button icon={<Save size={16} />} variant="primary" disabled={!memberDraft || !memberDraft.name.trim()} onClick={() => memberDraft && persist(ivicService.saveMember(memberDraft), "人员详情已保存")}>
+                保存
+              </Button>
+            </div>
+            {memberDraft && (
+              <div className="form-grid person-detail-grid">
+                <label>
+                  <span>人员名字</span>
+                  <input value={memberDraft.name} onChange={(event) => updateMemberDraft({ name: event.target.value })} />
+                </label>
+                <label>
+                  <span>电话</span>
+                  <input value={memberDraft.phone} onChange={(event) => updateMemberDraft({ phone: event.target.value })} />
+                </label>
+                <label>
+                  <span>邮箱</span>
+                  <input value={memberDraft.email} onChange={(event) => updateMemberDraft({ email: event.target.value })} />
+                </label>
+                <label className="wide">
+                  <span>备注</span>
+                  <textarea value={memberDraft.remark} onChange={(event) => updateMemberDraft({ remark: event.target.value })} />
+                </label>
+                <label className="switch-row">
+                  <input checked={memberDraft.isActive} onChange={(event) => updateMemberDraft({ isActive: event.target.checked })} type="checkbox" />
+                  <span>启用此人员并出现在选择列表中</span>
+                </label>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
         <div className="panel-heading">
           <div>
             <span className="section-kicker">分组详情</span>
@@ -496,7 +670,10 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
             </label>
             <label>
               <span>负责人/交接人</span>
-              <input value={draft.ownerName} onChange={(event) => updateDraft({ ownerName: event.target.value })} />
+              <select value={draft.ownerId ?? ""} onChange={(event) => updateGroupOwner(event.target.value)}>
+                <option value="">未选择负责人</option>
+                {ownerOptions.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+              </select>
             </label>
             <label>
               <span>简介/场景</span>
@@ -615,9 +792,27 @@ export function GroupsPage({ data, persist }: GroupsPageProps) {
             </label>
           </div>
         )}
+          </>
+        )}
       </section>
       {renderQuickSubmitDropMarker()}
       {renderQuickSubmitDragPreview()}
+      {pendingDelete && (
+        <div className="modal-backdrop confirm-backdrop" role="presentation">
+          <section aria-modal="true" className="modal-card discard-confirm-modal" role="dialog">
+            <h3>{pendingDelete.type === "group" ? "删除分组卡片" : "删除人员卡片"}</h3>
+            <p>
+              确认删除「{pendingDelete.name}」？{pendingDelete.summary}
+            </p>
+            <div className="modal-actions">
+              <Button onClick={() => setPendingDelete(null)}>取消</Button>
+              <Button icon={<Trash2 size={16} />} onClick={confirmDeleteTarget} variant="danger">
+                确认删除
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
@@ -630,4 +825,9 @@ function fieldName(item: QuickSubmitConfigItem) {
     return `子订单 · ${quickSubmitItemFieldOptions.find((option) => option.key === item.key)?.name ?? item.label}`;
   }
   return "自定义文本";
+}
+
+function memberColor(id: number) {
+  const hue = Math.abs(id * 47) % 360;
+  return `hsl(${hue} 62% 62%)`;
 }

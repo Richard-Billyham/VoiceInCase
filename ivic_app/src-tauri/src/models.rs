@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub struct ExpenseGroup {
     pub id: i64,
     pub name: String,
+    #[serde(default)]
+    pub owner_id: Option<i64>,
     pub owner_name: String,
     pub category: String,
     pub title_rule: String,
@@ -14,6 +16,22 @@ pub struct ExpenseGroup {
     pub attachment_rule_config: String,
     pub color: String,
     pub remark: String,
+    pub is_active: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonMember {
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub phone: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub remark: String,
+    #[serde(default = "default_true")]
     pub is_active: bool,
     pub updated_at: String,
 }
@@ -32,6 +50,10 @@ pub struct FormRecord {
     pub issue_date: String,
     pub group_id: Option<i64>,
     pub group_name: String,
+    #[serde(default)]
+    pub member_id: Option<i64>,
+    #[serde(default)]
+    pub member_name: String,
     pub content_type: String,
     pub status: String,
     pub has_invoice: bool,
@@ -69,6 +91,12 @@ pub struct ReimbursementItem {
     pub amount: f64,
     pub reconciled_amount: f64,
     pub status: String,
+    #[serde(default)]
+    pub is_released: bool,
+    #[serde(default)]
+    pub released_at: String,
+    #[serde(default)]
+    pub release_reason: String,
     pub exception_reason: String,
     pub remark: String,
 }
@@ -194,9 +222,14 @@ pub struct Settings {
 #[serde(rename_all = "camelCase")]
 pub struct AppData {
     pub groups: Vec<ExpenseGroup>,
+    pub members: Vec<PersonMember>,
     pub forms: Vec<FormRecord>,
     pub batches: Vec<ReimbursementBatch>,
     pub transactions: Vec<ReconciliationTransaction>,
     pub attachments: Vec<Attachment>,
     pub settings: Settings,
+}
+
+fn default_true() -> bool {
+    true
 }

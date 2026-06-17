@@ -6,7 +6,7 @@ export function formatMoney(value: number, hidden = false) {
 }
 
 export function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
-  if (["已完成", "已到账", "已报销", "已对账", "已匹配"].includes(status)) {
+  if (["已完成", "已到账", "已对账", "已匹配"].includes(status)) {
     return "success";
   }
   if (["待提交", "批次创建", "部分到账", "部分对账", "待补充", "待匹配"].includes(status)) {
