@@ -25,6 +25,17 @@ interface FormMatchCommit {
   matchedOrder: FormRecord;
 }
 
+export interface FormWithAttachmentsPayload {
+  record: FormRecord;
+  attachments: UploadedAttachmentPayload[];
+}
+
+export interface OcrInvoiceRequest {
+  fileName: string;
+  bytes: number[];
+  sourcePath?: string;
+}
+
 export type SettingsPathKind = "databasePath" | "attachmentDir";
 
 export interface UpdateCheckResult {
@@ -103,6 +114,39 @@ export const ivicService = {
     data.forms = exists ? data.forms.map((item) => (item.id === nextRecord.id ? nextRecord : item)) : [nextRecord, ...data.forms];
     data.batches = syncBatchesForForm(data.batches, nextRecord);
     data.attachments = [...nextAttachments, ...data.attachments];
+    return writeLocalData(data);
+  },
+
+  async saveFormsWithAttachments(items: FormWithAttachmentsPayload[]): Promise<AppData> {
+    if (isTauriRuntime()) {
+      return invoke<AppData>("save_forms_with_attachments", { items });
+    }
+    const data = readLocalData();
+    const uploadedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+    let attachmentSeed = Date.now();
+    for (const item of items) {
+      const resolvedRecord = resolveFormMember(item.record, data);
+      const nextAttachments: Attachment[] = item.attachments.map((attachment) => ({
+        id: attachmentSeed++,
+        ownerType: "invoice",
+        ownerId: resolvedRecord.id,
+        fileName: attachment.fileName,
+        fileType: attachment.fileType,
+        relativePath: `browser/imports/${resolvedRecord.id}/${attachment.fileName}`,
+        remark: attachment.remark,
+        uploadedAt,
+      }));
+      const existingCount = data.attachments.filter((attachment) => attachment.ownerType === "invoice" && attachment.ownerId === resolvedRecord.id).length;
+      const nextRecord = {
+        ...resolvedRecord,
+        attachmentCount: existingCount + nextAttachments.length,
+        hasInvoice: resolvedRecord.hasInvoice || nextAttachments.some((attachment) => attachment.fileType === "鍙戠エ"),
+      };
+      const exists = data.forms.some((form) => form.id === nextRecord.id);
+      data.forms = exists ? data.forms.map((form) => (form.id === nextRecord.id ? nextRecord : form)) : [nextRecord, ...data.forms];
+      data.batches = syncBatchesForForm(data.batches, nextRecord);
+      data.attachments = [...nextAttachments, ...data.attachments];
+    }
     return writeLocalData(data);
   },
 
@@ -189,6 +233,13 @@ export const ivicService = {
       totalWithTax: "",
       invoiceRemark: "",
     };
+  },
+
+  async recognizeInvoiceAttachments(items: OcrInvoiceRequest[]): Promise<OcrInvoiceResult[]> {
+    if (isTauriRuntime()) {
+      return invoke<OcrInvoiceResult[]>("recognize_invoice_attachments", { items });
+    }
+    return Promise.all(items.map((item) => this.recognizeInvoiceAttachment(item.fileName, item.bytes)));
   },
 
   async deleteForms(ids: number[]): Promise<AppData> {

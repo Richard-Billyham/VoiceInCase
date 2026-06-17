@@ -324,6 +324,12 @@ export function FormsPage({ data, persist }: FormsPageProps) {
                 "导入记录已写入表单",
               )
             }
+            onCreateForms={(items) =>
+              persist(
+                ivicService.saveFormsWithAttachments(items),
+                "批量导入记录已写入表单",
+              )
+            }
             onDirtyChange={setImportDirty}
             onSaved={closeImportModal}
           />

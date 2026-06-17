@@ -47,6 +47,7 @@ interface ImportDialogsProps {
   initialAttachments?: Attachment[];
   statusBatches?: ReimbursementBatch[];
   onCreateForm?: (record: FormRecord, attachments?: UploadedAttachmentPayload[]) => Promise<void> | void;
+  onCreateForms?: (items: Array<{ record: FormRecord; attachments: UploadedAttachmentPayload[] }>) => Promise<void> | void;
   onClose?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   onSaved?: () => void;
@@ -76,6 +77,7 @@ export function ImportDialogs({
   initialAttachments = [],
   statusBatches = [],
   onCreateForm,
+  onCreateForms,
   onClose,
   onDirtyChange,
   onSaved,
@@ -402,18 +404,28 @@ export function ImportDialogs({
     setIsRecognizing(true);
     setOcrMessage(`正在 OCR 识别 ${items.length} 个发票文件...`);
     let issueCount = 0;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      try {
-        const bytes = item.bytes ?? Array.from(new Uint8Array(await item.file.arrayBuffer()));
-        const result = await ivicService.recognizeInvoiceAttachment(item.file.name, bytes);
+    try {
+      const requests = await Promise.all(items.map(async (item) => ({
+        fileName: item.file.name,
+        sourcePath: item.sourcePath,
+        bytes: item.sourcePath ? [] : item.bytes ?? Array.from(new Uint8Array(await item.file.arrayBuffer())),
+      })));
+      const results = await ivicService.recognizeInvoiceAttachments(requests);
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
+        const result = results[index];
         const fallbackText = await extractReadableText(item.file);
-        const row = buildRecognizedBatchRow(item, index, result, fallbackText);
+        const row = result
+          ? buildRecognizedBatchRow(item, index, result, fallbackText)
+          : buildBatchRowFromDetail(item, index, applyOcrFallbackData(item.file, fallbackText).detail, fallbackText, "OCR 识别失败");
         if (batchRowProblem(row)) {
           issueCount += 1;
         }
         setBatchRows((current) => current.map((candidate) => (candidate.itemId === item.id ? row : candidate)));
-      } catch (exception) {
+      }
+    } catch (exception) {
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
         const fallbackText = await extractReadableText(item.file);
         const fallback = applyOcrFallbackData(item.file, fallbackText);
         const problem = exception instanceof Error ? exception.message : "OCR 识别失败";
@@ -687,11 +699,22 @@ export function ImportDialogs({
     setIsImporting(true);
     setError("");
     try {
+      const importItems: Array<{ record: FormRecord; attachments: UploadedAttachmentPayload[] }> = [];
       for (let index = 0; index < batchFiles.length; index += 1) {
         const item = batchFiles[index];
         const row = batchRows.find((candidate) => candidate.itemId === item.id);
         const payloads = await filesToPayloads([item], "发票", "批量导入发票源文件");
-        await onCreateForm?.(buildBatchRecord(item.file, index, row, selectedGroup, selectedMember), payloads);
+        importItems.push({
+          record: buildBatchRecord(item.file, index, row, selectedGroup, selectedMember),
+          attachments: payloads,
+        });
+      }
+      if (onCreateForms) {
+        await onCreateForms(importItems);
+      } else {
+        for (const item of importItems) {
+          await onCreateForm?.(item.record, item.attachments);
+        }
       }
       baselineSnapshotRef.current = dirtySnapshot;
       onDirtyChange?.(false);

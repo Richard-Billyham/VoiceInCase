@@ -6,6 +6,9 @@ use std::{
     process::Command,
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use chrono::Local;
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
@@ -16,10 +19,13 @@ use crate::domain;
 use crate::errors::{AppError, AppResult};
 use crate::files;
 use crate::models::{
-    AppData, DroppedFilePayload, ExpenseGroup, FormMatchPair, FormRecord, OcrInvoiceResult,
-    PersonMember, ReconciliationTransaction, ReimbursementBatch, Settings,
-    UploadedAttachmentPayload,
+    AppData, DroppedFilePayload, ExpenseGroup, FormMatchPair, FormRecord,
+    FormWithAttachmentsPayload, OcrInvoiceRequest, OcrInvoiceResult, PersonMember,
+    ReconciliationTransaction, ReimbursementBatch, Settings, UploadedAttachmentPayload,
 };
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -460,6 +466,73 @@ pub fn save_form_with_attachments(
 }
 
 #[tauri::command]
+pub fn save_forms_with_attachments(
+    app: AppHandle,
+    items: Vec<FormWithAttachmentsPayload>,
+) -> AppResult<AppData> {
+    if items.is_empty() {
+        return load_app_data(app);
+    }
+
+    let data_dir = db::data_dir(&app)?;
+    let attachment_root = db::attachment_dir(&app)?.join("imports");
+    let stamp = Local::now().format("%Y%m%d%H%M%S%3f").to_string();
+    let mut stored_files = Vec::new();
+
+    for (item_index, item) in items.iter().enumerate() {
+        let attachment_dir = attachment_root.join(item.record.id.to_string());
+        fs::create_dir_all(&attachment_dir)?;
+        for (attachment_index, attachment) in item.attachments.iter().enumerate() {
+            let file_name = sanitize_file_name(&attachment.file_name);
+            let stored_name = format!("{stamp}-{item_index}-{attachment_index}-{file_name}");
+            let target = files::ensure_inside(&data_dir, &attachment_dir.join(&stored_name))?;
+            fs::write(&target, &attachment.bytes)?;
+            let relative_path = Path::new("attachments")
+                .join("imports")
+                .join(item.record.id.to_string())
+                .join(&stored_name)
+                .to_string_lossy()
+                .replace('\\', "/");
+            stored_files.push((item_index, attachment, relative_path));
+        }
+    }
+
+    let mut conn = db::connect(&app)?;
+    let tx = conn.transaction()?;
+    for (item_index, item) in items.iter().enumerate() {
+        let old_status = current_invoice_status(&tx, item.record.id)?;
+        upsert_form_record(&tx, &item.record)?;
+        for (_, attachment, relative_path) in stored_files
+            .iter()
+            .filter(|(stored_item_index, _, _)| *stored_item_index == item_index)
+        {
+            tx.execute(
+                "INSERT INTO attachment(owner_type, owner_id, file_name, file_type, relative_path, file_hash, remark, uploaded_at)
+                 VALUES('invoice', ?1, ?2, ?3, ?4, '', ?5, CURRENT_TIMESTAMP)",
+                params![
+                    item.record.id,
+                    attachment.file_name,
+                    attachment.file_type,
+                    relative_path,
+                    attachment.remark
+                ],
+            )?;
+        }
+        sync_batch_items_for_form_tx(&tx, item.record.id, &item.record.status)?;
+        insert_status_log_tx(
+            &tx,
+            "invoice",
+            item.record.id,
+            old_status.as_deref(),
+            &item.record.status,
+            "batch import save",
+        )?;
+    }
+    tx.commit()?;
+    load_app_data(app)
+}
+
+#[tauri::command]
 pub fn save_matched_forms(
     app: AppHandle,
     records: Vec<FormRecord>,
@@ -641,14 +714,17 @@ except Exception as exc:
         .as_ref()
         .map(|path| path.to_string_lossy().to_string())
         .unwrap_or_default();
-    let output = Command::new(&runtime.python)
+    let mut command = Command::new(&runtime.python);
+    command
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .arg("-c")
         .arg(code)
         .arg(&runtime.service_dir)
         .arg(&temp_path)
-        .arg(tesseract_arg)
+        .arg(tesseract_arg);
+    hide_command_window(&mut command);
+    let output = command
         .output()
         .map_err(|error| AppError::Message(format!("Failed to start OCR: {error}")))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -661,6 +737,188 @@ except Exception as exc:
         result.message = stderr.trim().to_string();
     }
     Ok(result)
+}
+
+#[tauri::command]
+pub fn recognize_invoice_attachments(
+    app: AppHandle,
+    items: Vec<OcrInvoiceRequest>,
+) -> AppResult<Vec<OcrInvoiceResult>> {
+    let data_dir = db::data_dir(&app)?;
+    let ocr_dir = data_dir.join("ocr-temp");
+    fs::create_dir_all(&ocr_dir)?;
+    let stamp = Local::now().format("%Y%m%d%H%M%S%3f").to_string();
+    let mut manifest_items = Vec::new();
+
+    for (index, item) in items.into_iter().enumerate() {
+        let path = if !item.source_path.trim().is_empty() {
+            let source = PathBuf::from(item.source_path.trim());
+            if !source.is_file() {
+                return Err(AppError::Message(format!(
+                    "OCR source file is not readable: {}",
+                    source.display()
+                )));
+            }
+            source
+        } else {
+            let safe_name = sanitize_file_name(&item.file_name);
+            let temp_path = files::ensure_inside(
+                &data_dir,
+                &ocr_dir.join(format!("{stamp}-{index}-{safe_name}")),
+            )?;
+            fs::write(&temp_path, item.bytes)?;
+            temp_path
+        };
+        manifest_items.push(serde_json::json!({
+            "fileName": item.file_name,
+            "path": path.to_string_lossy(),
+        }));
+    }
+
+    let manifest_path =
+        files::ensure_inside(&data_dir, &ocr_dir.join(format!("{stamp}-manifest.json")))?;
+    fs::write(&manifest_path, serde_json::to_vec(&manifest_items)?)?;
+
+    let runtime = resolve_ocr_runtime(&app)?;
+    let tesseract_arg = runtime
+        .tesseract
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let code = batch_ocr_python_code();
+    let mut command = Command::new(&runtime.python);
+    command
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg("-c")
+        .arg(code)
+        .arg(&runtime.service_dir)
+        .arg(&manifest_path)
+        .arg(tesseract_arg);
+    hide_command_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| AppError::Message(format!("Failed to start batch OCR: {error}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout.trim().is_empty() {
+        return Err(AppError::Message(format!(
+            "Batch OCR returned no result. {stderr}"
+        )));
+    }
+    let mut results: Vec<OcrInvoiceResult> = serde_json::from_str(stdout.trim())?;
+    if !stderr.trim().is_empty() {
+        for result in &mut results {
+            if result.message.is_empty() {
+                result.message = stderr.trim().to_string();
+            }
+        }
+    }
+    Ok(results)
+}
+
+fn batch_ocr_python_code() -> &'static str {
+    r#"
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+service_dir = Path(sys.argv[1])
+manifest_path = Path(sys.argv[2])
+tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
+if tesseract_path:
+    tesseract = Path(tesseract_path)
+    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
+    tessdata = tesseract.parent / "tessdata"
+    if tessdata.exists():
+        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
+
+if os.name == "nt":
+    _ivic_original_popen = subprocess.Popen
+
+    def _ivic_hidden_popen(*args, **kwargs):
+        startupinfo = kwargs.get("startupinfo") or subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | 0x08000000
+        return _ivic_original_popen(*args, **kwargs)
+
+    subprocess.Popen = _ivic_hidden_popen
+
+sys.path.insert(0, str(service_dir))
+from ivic_ocr.service import format_ocr_environment_status, parse_invoice_file
+try:
+    from ivic_invoice_layout import parse_invoice_layout_file
+except Exception:
+    def parse_invoice_layout_file(_file_path):
+        return {}
+
+def merge_layout_result(data, layout_data):
+    for key, value in (layout_data or {}).items():
+        if value in (None, ""):
+            continue
+        if key in {"buyer_name", "buyer_tax_no", "seller_name", "seller_tax_no", "description"}:
+            data[key] = value
+        elif data.get(key) in (None, ""):
+            data[key] = value
+    return data
+
+def empty_result(message):
+    return {
+        "ok": False,
+        "message": message,
+        "rawText": "",
+        "invoiceNumber": "",
+        "invoiceType": "",
+        "issueDate": "",
+        "buyerName": "",
+        "buyerTaxNo": "",
+        "sellerName": "",
+        "sellerTaxNo": "",
+        "itemName": "",
+        "specModel": "",
+        "unit": "",
+        "quantity": "",
+        "subtotalAmount": "",
+        "taxAmount": "",
+        "totalWithTax": "",
+        "invoiceRemark": "",
+    }
+
+def parse_one(file_path):
+    try:
+        data = parse_invoice_file(str(file_path))
+        data = merge_layout_result(data, parse_invoice_layout_file(file_path))
+        return {
+            "ok": True,
+            "message": "OCR completed",
+            "rawText": data.get("raw_text") or "",
+            "invoiceNumber": data.get("invoice_number") or "",
+            "invoiceType": data.get("invoice_type") or "",
+            "issueDate": data.get("issue_date") or "",
+            "buyerName": data.get("buyer_name") or "",
+            "buyerTaxNo": data.get("buyer_tax_no") or "",
+            "sellerName": data.get("seller_name") or "",
+            "sellerTaxNo": data.get("seller_tax_no") or "",
+            "itemName": data.get("item_name") or "",
+            "specModel": data.get("spec_model") or "",
+            "unit": data.get("unit") or "",
+            "quantity": "" if data.get("quantity") is None else str(data.get("quantity")),
+            "subtotalAmount": "" if data.get("amount_without_tax") is None else str(data.get("amount_without_tax")),
+            "taxAmount": "" if data.get("tax_amount") is None else str(data.get("tax_amount")),
+            "totalWithTax": "" if data.get("amount") is None else str(data.get("amount")),
+            "invoiceRemark": data.get("description") or "",
+        }
+    except Exception as exc:
+        return empty_result(str(exc) + "\n" + format_ocr_environment_status())
+
+items = json.loads(manifest_path.read_text(encoding="utf-8"))
+results = [parse_one(Path(item["path"])) for item in items]
+print(json.dumps(results, ensure_ascii=True))
+"#
 }
 
 #[tauri::command]
@@ -854,6 +1112,13 @@ fn python_executable(workspace: &Path) -> PathBuf {
         return venv_python;
     }
     PathBuf::from("python")
+}
+
+fn hide_command_window(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
 }
 
 fn infer_file_type(file_name: &str) -> String {

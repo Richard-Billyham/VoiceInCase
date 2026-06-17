@@ -169,6 +169,14 @@ pub struct UploadedAttachmentPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FormWithAttachmentsPayload {
+    pub record: FormRecord,
+    #[serde(default)]
+    pub attachments: Vec<UploadedAttachmentPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FormMatchPair {
     pub order_id: i64,
     pub invoice_id: i64,
@@ -205,6 +213,16 @@ pub struct OcrInvoiceResult {
     pub tax_amount: String,
     pub total_with_tax: String,
     pub invoice_remark: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrInvoiceRequest {
+    pub file_name: String,
+    #[serde(default)]
+    pub bytes: Vec<u8>,
+    #[serde(default)]
+    pub source_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
