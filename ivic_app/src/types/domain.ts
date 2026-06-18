@@ -132,6 +132,10 @@ export interface ReconciliationTransaction {
   no: string;
   amount: number;
   transactionTime: string;
+  transactionAccount?: string;
+  transactionLocation?: string;
+  counterpartyAccount?: string;
+  accountingDate?: string;
   category: string;
   direction: "收入" | "支出";
   status: TransactionStatus;
@@ -211,6 +215,18 @@ export interface OcrInvoiceResult {
   taxAmount: string;
   totalWithTax: string;
   invoiceRemark: string;
+}
+
+export interface OcrIncomeResult {
+  ok: boolean;
+  message: string;
+  rawText: string;
+  amount: string;
+  transactionAccount: string;
+  transactionTime: string;
+  transactionLocation: string;
+  counterpartyAccount: string;
+  accountingDate: string;
 }
 
 export interface BatchImportRow {

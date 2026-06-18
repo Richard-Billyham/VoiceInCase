@@ -20,7 +20,7 @@ use crate::errors::{AppError, AppResult};
 use crate::files;
 use crate::models::{
     AppData, DroppedFilePayload, ExpenseGroup, FormMatchPair, FormRecord,
-    FormWithAttachmentsPayload, OcrInvoiceRequest, OcrInvoiceResult, PersonMember,
+    FormWithAttachmentsPayload, OcrIncomeResult, OcrInvoiceRequest, OcrInvoiceResult, PersonMember,
     ReconciliationTransaction, ReimbursementBatch, Settings, UploadedAttachmentPayload,
 };
 
@@ -631,6 +631,7 @@ pub fn recognize_invoice_attachment(
     fs::write(&temp_path, bytes)?;
 
     let runtime = resolve_ocr_runtime(&app)?;
+    log_ocr_runtime("invoice", &runtime);
     let code = r#"
 import json
 import os
@@ -780,6 +781,7 @@ pub fn recognize_invoice_attachments(
     fs::write(&manifest_path, serde_json::to_vec(&manifest_items)?)?;
 
     let runtime = resolve_ocr_runtime(&app)?;
+    log_ocr_runtime("batch invoice", &runtime);
     let tesseract_arg = runtime
         .tesseract
         .as_ref()
@@ -815,6 +817,54 @@ pub fn recognize_invoice_attachments(
         }
     }
     Ok(results)
+}
+
+#[tauri::command]
+pub fn recognize_income_attachment(
+    app: AppHandle,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> AppResult<OcrIncomeResult> {
+    let data_dir = db::data_dir(&app)?;
+    let ocr_dir = data_dir.join("ocr-temp");
+    fs::create_dir_all(&ocr_dir)?;
+    let stamp = Local::now().format("%Y%m%d%H%M%S%3f").to_string();
+    let safe_name = sanitize_file_name(&file_name);
+    let temp_path = files::ensure_inside(&data_dir, &ocr_dir.join(format!("{stamp}-{safe_name}")))?;
+    fs::write(&temp_path, bytes)?;
+
+    let runtime = resolve_ocr_runtime(&app)?;
+    log_ocr_runtime("income", &runtime);
+    let tesseract_arg = runtime
+        .tesseract
+        .as_ref()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let mut command = Command::new(&runtime.python);
+    command
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg("-c")
+        .arg(income_ocr_python_code())
+        .arg(&runtime.service_dir)
+        .arg(&temp_path)
+        .arg(tesseract_arg);
+    hide_command_window(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| AppError::Message(format!("Failed to start income OCR: {error}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stdout.trim().is_empty() {
+        return Err(AppError::Message(format!(
+            "Income OCR returned no result. {stderr}"
+        )));
+    }
+    let mut result: OcrIncomeResult = serde_json::from_str(stdout.trim())?;
+    if !stderr.trim().is_empty() && result.message.is_empty() {
+        result.message = stderr.trim().to_string();
+    }
+    Ok(result)
 }
 
 fn batch_ocr_python_code() -> &'static str {
@@ -921,6 +971,122 @@ print(json.dumps(results, ensure_ascii=True))
 "#
 }
 
+fn income_ocr_python_code() -> &'static str {
+    r#"
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+service_dir = Path(sys.argv[1])
+file_path = Path(sys.argv[2])
+tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
+if tesseract_path:
+    tesseract = Path(tesseract_path)
+    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
+    tessdata = tesseract.parent / "tessdata"
+    if tessdata.exists():
+        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
+
+if os.name == "nt":
+    _ivic_original_popen = subprocess.Popen
+
+    def _ivic_hidden_popen(*args, **kwargs):
+        startupinfo = kwargs.get("startupinfo") or subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+        kwargs["creationflags"] = kwargs.get("creationflags", 0) | 0x08000000
+        return _ivic_original_popen(*args, **kwargs)
+
+    subprocess.Popen = _ivic_hidden_popen
+
+sys.path.insert(0, str(service_dir))
+from ivic_ocr.service import format_ocr_environment_status, recognize_invoice_file
+
+def empty_result(message):
+    return {
+        "ok": False,
+        "message": message,
+        "rawText": "",
+        "amount": "",
+        "transactionAccount": "",
+        "transactionTime": "",
+        "transactionLocation": "",
+        "counterpartyAccount": "",
+        "accountingDate": "",
+    }
+
+def normalize_text(text):
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
+
+def compact_lines(text):
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+def clean_value(value):
+    return re.sub(r"\s+", " ", value or "").strip(" :：")
+
+def extract_after_label(lines, label, stop_labels):
+    for index, line in enumerate(lines):
+        if label not in line:
+            continue
+        value = line.split(label, 1)[1].strip(" :：")
+        collected = [value] if value else []
+        for next_line in lines[index + 1:]:
+            if any(stop in next_line for stop in stop_labels):
+                break
+            if next_line:
+                collected.append(next_line)
+            if len(collected) >= 4:
+                break
+        return clean_value(" ".join(collected))
+    return ""
+
+def strip_balance_section(text):
+    return re.split(r"账户余额|余额", text, maxsplit=1)[0]
+
+def parse_amount(text):
+    safe_text = strip_balance_section(text)
+    matches = re.findall(r"(?:¥|￥|CNY|RMB)?\s*([+-]?\d[\d,]*\.\d{2})", safe_text)
+    if not matches:
+        return ""
+    values = []
+    for match in matches:
+        try:
+            values.append(abs(float(match.replace(",", ""))))
+        except ValueError:
+            pass
+    return f"{max(values):.2f}" if values else ""
+
+def parse_income(text):
+    normalized = normalize_text(text)
+    lines = compact_lines(normalized)
+    stop_labels = ["交易账户", "交易时间", "交易地点/附言", "对方账户", "记账日", "账户余额", "备注"]
+    return {
+        "ok": True,
+        "message": "Income OCR completed",
+        "rawText": strip_balance_section(normalized).strip(),
+        "amount": parse_amount(normalized),
+        "transactionAccount": extract_after_label(lines, "交易账户", stop_labels),
+        "transactionTime": extract_after_label(lines, "交易时间", stop_labels),
+        "transactionLocation": extract_after_label(lines, "交易地点/附言", stop_labels),
+        "counterpartyAccount": extract_after_label(lines, "对方账户", stop_labels),
+        "accountingDate": extract_after_label(lines, "记账日", stop_labels),
+    }
+
+try:
+    text = recognize_invoice_file(str(file_path))
+    print(json.dumps(parse_income(text), ensure_ascii=True))
+except Exception as exc:
+    print(json.dumps(empty_result(str(exc) + "\n" + format_ocr_environment_status()), ensure_ascii=True))
+"#
+}
+
 #[tauri::command]
 pub fn delete_form_records(app: AppHandle, ids: Vec<i64>) -> AppResult<AppData> {
     let data_dir = db::data_dir(&app)?;
@@ -1023,11 +1189,20 @@ struct OcrRuntime {
 }
 
 fn resolve_ocr_runtime(app: &AppHandle) -> AppResult<OcrRuntime> {
-    if let Some(runtime) = bundled_ocr_runtime(app) {
-        return Ok(runtime);
-    }
-    if let Some(runtime) = development_ocr_runtime() {
-        return Ok(runtime);
+    if cfg!(debug_assertions) {
+        if let Some(runtime) = development_ocr_runtime() {
+            return Ok(runtime);
+        }
+        if let Some(runtime) = bundled_ocr_runtime(app) {
+            return Ok(runtime);
+        }
+    } else {
+        if let Some(runtime) = bundled_ocr_runtime(app) {
+            return Ok(runtime);
+        }
+        if let Some(runtime) = development_ocr_runtime() {
+            return Ok(runtime);
+        }
     }
     Err(AppError::Message(
         "OCR runtime was not found. Stage ivic_app/src-tauri/resources/ocr before release builds, or keep ivic_app/src-tauri/python/ivic_ocr for development.".to_string(),
@@ -1112,6 +1287,20 @@ fn python_executable(workspace: &Path) -> PathBuf {
         return venv_python;
     }
     PathBuf::from("python")
+}
+
+fn log_ocr_runtime(label: &str, runtime: &OcrRuntime) {
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "[ivic] {label} OCR runtime: python={}, service_dir={}, tesseract={}",
+        runtime.python.display(),
+        runtime.service_dir.display(),
+        runtime
+            .tesseract
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<PATH/default>".to_string())
+    );
 }
 
 fn hide_command_window(command: &mut Command) {
@@ -1833,10 +2022,12 @@ fn upsert_transaction_base_tx(
     transaction: &ReconciliationTransaction,
 ) -> AppResult<()> {
     tx.execute(
-        "INSERT INTO reconciliation_transaction(transaction_id, transaction_no, amount, transaction_time, category, direction, status, remark, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, CURRENT_TIMESTAMP)
+        "INSERT INTO reconciliation_transaction(transaction_id, transaction_no, amount, transaction_time, transaction_account, transaction_location, counterparty_account, accounting_date, category, direction, status, remark, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP)
          ON CONFLICT(transaction_id) DO UPDATE SET
            transaction_no=excluded.transaction_no, amount=excluded.amount, transaction_time=excluded.transaction_time,
+           transaction_account=excluded.transaction_account, transaction_location=excluded.transaction_location,
+           counterparty_account=excluded.counterparty_account, accounting_date=excluded.accounting_date,
            category=excluded.category, direction=excluded.direction, status=excluded.status, remark=excluded.remark,
            updated_at=CURRENT_TIMESTAMP",
         params![
@@ -1844,6 +2035,10 @@ fn upsert_transaction_base_tx(
             transaction.no,
             transaction.amount,
             transaction.transaction_time,
+            transaction.transaction_account,
+            transaction.transaction_location,
+            transaction.counterparty_account,
+            transaction.accounting_date,
             transaction.category,
             transaction.direction,
             transaction.status,

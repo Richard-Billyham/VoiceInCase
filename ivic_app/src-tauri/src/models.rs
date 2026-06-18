@@ -136,6 +136,14 @@ pub struct ReconciliationTransaction {
     pub no: String,
     pub amount: f64,
     pub transaction_time: String,
+    #[serde(default)]
+    pub transaction_account: String,
+    #[serde(default)]
+    pub transaction_location: String,
+    #[serde(default)]
+    pub counterparty_account: String,
+    #[serde(default)]
+    pub accounting_date: String,
     pub category: String,
     pub direction: String,
     pub status: String,
@@ -223,6 +231,20 @@ pub struct OcrInvoiceRequest {
     pub bytes: Vec<u8>,
     #[serde(default)]
     pub source_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrIncomeResult {
+    pub ok: bool,
+    pub message: String,
+    pub raw_text: String,
+    pub amount: String,
+    pub transaction_account: String,
+    pub transaction_time: String,
+    pub transaction_location: String,
+    pub counterparty_account: String,
+    pub accounting_date: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

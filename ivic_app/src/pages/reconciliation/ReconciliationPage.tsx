@@ -20,17 +20,13 @@ interface ReconciliationItemRow extends ReimbursementItem {
 
 const incomeStatusOptions: TransactionStatus[] = ["待对账", "部分对账", "已对账", "金额差异", "异常"];
 
-interface AttachmentImagePosition {
-  x: number;
-  y: number;
-}
-
 interface AttachmentImageDrag {
   id: string;
   pointerId: number;
   startX: number;
   startY: number;
-  startPosition: AttachmentImagePosition;
+  startScrollLeft: number;
+  startScrollTop: number;
 }
 
 export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
@@ -45,7 +41,16 @@ export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
     [data.batches],
   );
   const needle = keyword.trim().toLowerCase();
-  const filteredIncomes = data.transactions.filter((item) => !needle || [item.no, item.category, item.status, item.remark].join(" ").toLowerCase().includes(needle));
+  const filteredIncomes = data.transactions.filter((item) => !needle || [
+    item.no,
+    item.category,
+    item.status,
+    item.transactionAccount,
+    item.transactionLocation,
+    item.counterpartyAccount,
+    item.accountingDate,
+    item.remark,
+  ].join(" ").toLowerCase().includes(needle));
   const selectedIncome = data.transactions.find((item) => selectedIncomeIds.includes(item.id)) ?? null;
   const incomeAmount = selectedIncome?.amount ?? 0;
   const selectedItemRows = allItems.filter((item) => selectedItems.includes(item.id));
@@ -56,6 +61,8 @@ export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
     { key: "no", header: "到账编号", width: "170px", render: (row) => row.no },
     { key: "amount", header: "到账金额", width: "120px", align: "right", sortable: true, render: (row) => formatMoney(row.amount, hidden), sortValue: (row) => row.amount },
     { key: "time", header: "到账时间", width: "150px", render: (row) => row.transactionTime },
+    { key: "transactionAccount", header: "交易账户", width: "170px", render: (row) => row.transactionAccount || "-" },
+    { key: "counterpartyAccount", header: "对方账户", width: "170px", render: (row) => row.counterpartyAccount || "-" },
     { key: "status", header: "状态", width: "112px", render: (row) => <StatusPill value={row.status} tone={statusTone(row.status)} /> },
     { key: "attachmentCount", header: "附件", width: "84px", align: "right", render: (row) => `${row.attachmentCount} 张`, sortValue: (row) => row.attachmentCount },
     { key: "remark", header: "备注", width: "240px", render: (row) => row.remark || "-" },
@@ -218,6 +225,7 @@ function IncomeEditorDialog({
   const [error, setError] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<SelectedFileItem[]>([]);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [isRecognizingIncome, setIsRecognizingIncome] = useState(false);
   const attachmentFilesRef = useRef<SelectedFileItem[]>([]);
 
   useEffect(() => {
@@ -268,13 +276,44 @@ function IncomeEditorDialog({
     setDraft((current) => ({ ...current, ...patchValue }));
   }
 
-  function addAttachments(files: File[]) {
+  async function addAttachments(files: File[]) {
     const images = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|bmp|gif|webp)$/i.test(file.name));
     if (images.length !== files.length) {
       setError("这里只收到账截图图片，PDF 或其他文件先放一放。");
     }
     if (images.length) {
-      setAttachmentFiles((current) => [...current, ...toFileItems(images)]);
+      const nextItems = toFileItems(images);
+      setAttachmentFiles((current) => [...current, ...nextItems]);
+      await recognizeIncomeImage(nextItems[0]);
+    }
+  }
+
+  async function recognizeIncomeImage(item: SelectedFileItem | undefined) {
+    if (!item) {
+      return;
+    }
+    setIsRecognizingIncome(true);
+    setError("");
+    try {
+      const bytes = item.bytes ?? Array.from(new Uint8Array(await item.file.arrayBuffer()));
+      const result = await ivicService.recognizeIncomeAttachment(item.file.name, bytes);
+      if (!result.ok) {
+        setError(result.message || "到账截图 OCR 识别失败，请手动填写。");
+        return;
+      }
+      setDraft((current) => ({
+        ...current,
+        amount: Number(result.amount) || current.amount,
+        transactionTime: result.transactionTime || current.transactionTime,
+        transactionAccount: result.transactionAccount || current.transactionAccount || "",
+        transactionLocation: result.transactionLocation || current.transactionLocation || "",
+        counterpartyAccount: result.counterpartyAccount || current.counterpartyAccount || "",
+        accountingDate: result.accountingDate || current.accountingDate || "",
+      }));
+    } catch (exception) {
+      setError(exception instanceof Error ? exception.message : "到账截图 OCR 识别失败，请手动填写。");
+    } finally {
+      setIsRecognizingIncome(false);
     }
   }
 
@@ -283,12 +322,8 @@ function IncomeEditorDialog({
   }
 
   async function submit() {
-    const no = draft.no.trim();
+    const no = draft.no.trim() || buildIncomeNo();
     const category = draft.category.trim() || "报销到账";
-    if (!no) {
-      setError("请填写到账编号。");
-      return;
-    }
     if (!Number.isFinite(draft.amount) || draft.amount <= 0) {
       setError("到账金额必须大于 0。");
       return;
@@ -304,6 +339,10 @@ function IncomeEditorDialog({
       direction: "收入" as const,
       amount: Number(draft.amount.toFixed(2)),
       transactionTime: draft.transactionTime.trim(),
+      transactionAccount: draft.transactionAccount?.trim() ?? "",
+      transactionLocation: draft.transactionLocation?.trim() ?? "",
+      counterpartyAccount: draft.counterpartyAccount?.trim() ?? "",
+      accountingDate: draft.accountingDate?.trim() ?? "",
       remark: draft.remark.trim(),
     };
     const newAttachments = await filesToPayloads(attachmentFiles, "到账截图", `${no} 到账截图`);
@@ -339,6 +378,22 @@ function IncomeEditorDialog({
               <span>类别</span>
               <input value={draft.category} onChange={(event) => patch({ category: event.target.value })} />
             </label>
+            <label>
+              <span>交易账户</span>
+              <input value={draft.transactionAccount ?? ""} onChange={(event) => patch({ transactionAccount: event.target.value })} />
+            </label>
+            <label>
+              <span>对方账户</span>
+              <input value={draft.counterpartyAccount ?? ""} onChange={(event) => patch({ counterpartyAccount: event.target.value })} />
+            </label>
+            <label>
+              <span>记账日</span>
+              <input value={draft.accountingDate ?? ""} onChange={(event) => patch({ accountingDate: event.target.value })} />
+            </label>
+            <label className="wide">
+              <span>交易地点/附言</span>
+              <textarea value={draft.transactionLocation ?? ""} onChange={(event) => patch({ transactionLocation: event.target.value })} />
+            </label>
             <label className="wide">
               <span>状态</span>
               <select value={draft.status} onChange={(event) => patch({ status: event.target.value as TransactionStatus })}>
@@ -350,7 +405,7 @@ function IncomeEditorDialog({
               <textarea value={draft.remark} onChange={(event) => patch({ remark: event.target.value })} />
             </label>
           </div>
-          <AttachmentDropZone loading={loadingAttachments} onFiles={addAttachments} />
+          <AttachmentDropZone loading={loadingAttachments || isRecognizingIncome} onFiles={addAttachments} />
         </div>
         <IncomeAttachmentPanel
           files={attachmentFiles}
@@ -373,18 +428,14 @@ function IncomeAttachmentPanel({
   onRemove: (id: string) => void;
 }) {
   const [zoomById, setZoomById] = useState<Record<string, number>>({});
-  const [positionById, setPositionById] = useState<Record<string, AttachmentImagePosition>>({});
   const dragRef = useRef<AttachmentImageDrag | null>(null);
+  const viewportRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   function adjustZoom(id: string, delta: number) {
     setZoomById((current) => ({
       ...current,
       [id]: clampZoom((current[id] ?? 1) + delta),
     }));
-  }
-
-  function positionFor(id: string) {
-    return positionById[id] ?? { x: 50, y: 0 };
   }
 
   function startImageDrag(event: React.PointerEvent<HTMLDivElement>, id: string) {
@@ -398,7 +449,8 @@ function IncomeAttachmentPanel({
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      startPosition: positionFor(id),
+      startScrollLeft: event.currentTarget.scrollLeft,
+      startScrollTop: event.currentTarget.scrollTop,
     };
   }
 
@@ -407,17 +459,8 @@ function IncomeAttachmentPanel({
     if (!drag || drag.pointerId !== event.pointerId) {
       return;
     }
-    const rect = event.currentTarget.getBoundingClientRect();
-    const zoom = zoomById[drag.id] ?? 1;
-    const nextX = drag.startPosition.x - ((event.clientX - drag.startX) / Math.max(1, rect.width)) * (100 / zoom);
-    const nextY = drag.startPosition.y - ((event.clientY - drag.startY) / Math.max(1, rect.height)) * (100 / zoom);
-    setPositionById((current) => ({
-      ...current,
-      [drag.id]: {
-        x: clampPercent(nextX),
-        y: clampPercent(nextY),
-      },
-    }));
+    event.currentTarget.scrollLeft = drag.startScrollLeft + (drag.startX - event.clientX);
+    event.currentTarget.scrollTop = drag.startScrollTop + (drag.startY - event.clientY);
   }
 
   function stopImageDrag(event: React.PointerEvent<HTMLDivElement>) {
@@ -432,10 +475,11 @@ function IncomeAttachmentPanel({
   }
 
   function resetImagePosition(id: string) {
-    setPositionById((current) => ({
-      ...current,
-      [id]: { x: 50, y: 0 },
-    }));
+    const viewport = viewportRefs.current[id];
+    if (viewport) {
+      viewport.scrollLeft = 0;
+      viewport.scrollTop = 0;
+    }
   }
 
   if (!files.length) {
@@ -463,6 +507,9 @@ function IncomeAttachmentPanel({
                 <>
                   <div
                     className="income-attachment-image-viewport"
+                    ref={(node) => {
+                      viewportRefs.current[item.id] = node;
+                    }}
                     onDoubleClick={() => resetImagePosition(item.id)}
                     onPointerCancel={stopImageDrag}
                     onPointerDown={(event) => startImageDrag(event, item.id)}
@@ -474,8 +521,7 @@ function IncomeAttachmentPanel({
                       draggable={false}
                       src={item.url}
                       style={{
-                        objectPosition: `${positionFor(item.id).x}% ${positionFor(item.id).y}%`,
-                        transform: `scale(${zoomById[item.id] ?? 1})`,
+                        width: `${(zoomById[item.id] ?? 1) * 100}%`,
                       }}
                     />
                   </div>
@@ -510,11 +556,7 @@ function clampZoom(value: number) {
   return Math.min(2.5, Math.max(0.7, Number(value.toFixed(2))));
 }
 
-function clampPercent(value: number) {
-  return Math.min(100, Math.max(0, Number(value.toFixed(2))));
-}
-
-function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (files: File[]) => void }) {
+function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (files: File[]) => void | Promise<void> }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -563,17 +605,26 @@ function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (
   );
 }
 
-function buildIncomeDraft(): ReconciliationTransaction {
+function buildIncomeNo() {
   const now = new Date();
   const stamp = now.toISOString().slice(0, 10).replace(/-/g, "");
+  return `IN-${stamp}-${now.getTime().toString().slice(-6)}`;
+}
+
+function buildIncomeDraft(): ReconciliationTransaction {
+  const now = new Date();
   return {
     id: Date.now(),
-    no: `IN-${stamp}-NEW`,
+    no: buildIncomeNo(),
     amount: 0,
     transactionTime: now.toLocaleString("zh-CN", { hour12: false }),
     category: "报销到账",
     direction: "收入",
     status: "待对账",
+    transactionAccount: "",
+    transactionLocation: "",
+    counterpartyAccount: "",
+    accountingDate: "",
     remark: "",
     attachmentCount: 0,
     matchedBatchIds: [],

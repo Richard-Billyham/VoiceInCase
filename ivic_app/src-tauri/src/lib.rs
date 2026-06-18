@@ -8,10 +8,10 @@ mod models;
 use commands::{
     backup_now, check_for_updates, delete_batch, delete_form_records, delete_group, delete_member,
     load_app_data, open_external_url, pick_settings_path, read_attachment_file, read_dropped_files,
-    recognize_invoice_attachment, recognize_invoice_attachments, release_batch_item_for_retry,
-    save_batch, save_form_record, save_form_with_attachments, save_forms_with_attachments,
-    save_group, save_matched_forms, save_member, save_reconciliation_result, save_settings,
-    save_transaction, save_transaction_with_attachments,
+    recognize_income_attachment, recognize_invoice_attachment, recognize_invoice_attachments,
+    release_batch_item_for_retry, save_batch, save_form_record, save_form_with_attachments,
+    save_forms_with_attachments, save_group, save_matched_forms, save_member,
+    save_reconciliation_result, save_settings, save_transaction, save_transaction_with_attachments,
 };
 
 pub fn run() {
@@ -32,6 +32,7 @@ pub fn run() {
             read_dropped_files,
             recognize_invoice_attachment,
             recognize_invoice_attachments,
+            recognize_income_attachment,
             delete_form_records,
             delete_group,
             delete_member,

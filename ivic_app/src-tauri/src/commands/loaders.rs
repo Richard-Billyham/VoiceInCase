@@ -209,7 +209,8 @@ fn load_batch_items(
 
 fn load_transactions(conn: &rusqlite::Connection) -> AppResult<Vec<ReconciliationTransaction>> {
     let mut stmt = conn.prepare(
-        "SELECT transaction_id, transaction_no, amount, transaction_time, category, direction, status, remark
+        "SELECT transaction_id, transaction_no, amount, transaction_time, transaction_account,
+                transaction_location, counterparty_account, accounting_date, category, direction, status, remark
          FROM reconciliation_transaction ORDER BY transaction_time DESC",
     )?;
     let mut rows = stmt.query([])?;
@@ -221,10 +222,14 @@ fn load_transactions(conn: &rusqlite::Connection) -> AppResult<Vec<Reconciliatio
             no: row.get(1)?,
             amount: row.get(2)?,
             transaction_time: row.get(3)?,
-            category: row.get(4)?,
-            direction: row.get(5)?,
-            status: row.get(6)?,
-            remark: row.get(7)?,
+            transaction_account: row.get(4)?,
+            transaction_location: row.get(5)?,
+            counterparty_account: row.get(6)?,
+            accounting_date: row.get(7)?,
+            category: row.get(8)?,
+            direction: row.get(9)?,
+            status: row.get(10)?,
+            remark: row.get(11)?,
             attachment_count: count_transaction_attachments(conn, id)?,
             matched_batch_ids: load_transaction_batch_ids(conn, id)?,
             matched_item_ids: load_transaction_item_ids(conn, id)?,

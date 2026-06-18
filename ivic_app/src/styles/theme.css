@@ -86,19 +86,80 @@
   color: #cce8d7;
 }
 
-[data-theme="night"] .status-pill,
+[data-theme="night"] .status-pill {
+  --status-bg: #302820;
+  --status-border: #5a4c41;
+  --status-text: var(--text-main);
+  border-color: var(--status-border);
+  background: var(--status-bg);
+  color: var(--status-text);
+}
+
 [data-theme="night"] .group-badge {
   background: #302820;
 }
 
-[data-theme="night"] .status-pill.success,
+[data-theme="night"] .status-pill.draft {
+  --status-bg: #362720;
+  --status-border: #6b4b3e;
+  --status-text: #d7a08f;
+}
+
+[data-theme="night"] .status-pill.match {
+  --status-bg: #1e3235;
+  --status-border: #426b72;
+  --status-text: #8dc2ca;
+}
+
+[data-theme="night"] .status-pill.submit {
+  --status-bg: #3a2c1c;
+  --status-border: #725934;
+  --status-text: var(--warning);
+}
+
+[data-theme="night"] .status-pill.queued {
+  --status-bg: #3b321d;
+  --status-border: #7b6840;
+  --status-text: #d6bf76;
+}
+
+[data-theme="night"] .status-pill.progress,
+[data-theme="night"] .status-pill.info {
+  --status-bg: #20313a;
+  --status-border: #486b7b;
+  --status-text: var(--info);
+}
+
+[data-theme="night"] .status-pill.partial {
+  --status-bg: #2b341f;
+  --status-border: #5e7041;
+  --status-text: #b5cf78;
+}
+
+[data-theme="night"] .status-pill.success {
+  --status-bg: #20342b;
+  --status-border: #4d745e;
+  --status-text: var(--success);
+}
+
 [data-theme="night"] .difference-bar.success,
 [data-theme="night"] .form-toast {
   background: #20342b;
   color: var(--success);
 }
 
-[data-theme="night"] .status-pill.warning,
+[data-theme="night"] .status-pill.warning {
+  --status-bg: #3a2c1c;
+  --status-border: #725934;
+  --status-text: var(--warning);
+}
+
+[data-theme="night"] .status-pill.cancelled {
+  --status-bg: #2f2925;
+  --status-border: #665a52;
+  --status-text: #b6a69a;
+}
+
 [data-theme="night"] .match-toast,
 [data-theme="night"] .difference-bar.warning,
 [data-theme="night"] .import-error {
@@ -106,17 +167,43 @@
   color: var(--warning);
 }
 
-[data-theme="night"] .status-pill.danger,
+[data-theme="night"] .status-pill.danger {
+  --status-bg: #3a2420;
+  --status-border: #794b43;
+  --status-text: var(--danger);
+}
+
 [data-theme="night"] .income-editor-error,
 [data-theme="night"] .submit-error-modal {
   background: #3a2420;
   color: var(--danger);
 }
 
-[data-theme="night"] .status-pill.info,
+[data-theme="night"] .import-ocr-action {
+  border-color: #794b43;
+  background: #3a2420;
+  color: var(--danger);
+}
+
 [data-theme="night"] .match-table button.matched-temp {
   background: #20313a;
   color: var(--info);
+}
+
+[data-theme="night"] .status-pill.draft,
+[data-theme="night"] .status-pill.match,
+[data-theme="night"] .status-pill.submit,
+[data-theme="night"] .status-pill.queued,
+[data-theme="night"] .status-pill.progress,
+[data-theme="night"] .status-pill.partial,
+[data-theme="night"] .status-pill.success,
+[data-theme="night"] .status-pill.warning,
+[data-theme="night"] .status-pill.cancelled,
+[data-theme="night"] .status-pill.danger,
+[data-theme="night"] .status-pill.info {
+  border-color: var(--status-border);
+  background: var(--status-bg);
+  color: var(--status-text);
 }
 
 [data-theme="night"] .dashboard-chart-row div,

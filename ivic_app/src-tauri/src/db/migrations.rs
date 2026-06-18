@@ -157,6 +157,10 @@ CREATE TABLE IF NOT EXISTS reconciliation_transaction (
   transaction_no TEXT NOT NULL DEFAULT '',
   amount REAL NOT NULL DEFAULT 0,
   transaction_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  transaction_account TEXT NOT NULL DEFAULT '',
+  transaction_location TEXT NOT NULL DEFAULT '',
+  counterparty_account TEXT NOT NULL DEFAULT '',
+  accounting_date TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT '报销到账',
   direction TEXT NOT NULL DEFAULT '收入',
   status TEXT NOT NULL DEFAULT '待对账',
@@ -222,8 +226,40 @@ pub fn apply_schema(conn: &Connection) -> AppResult<()> {
     ensure_group_template_fields(conn)?;
     ensure_reimbursement_timeline_fields(conn)?;
     ensure_reimbursement_release_fields(conn)?;
+    ensure_transaction_detail_fields(conn)?;
     normalize_legacy_reimbursement_statuses(conn)?;
     remove_legacy_seed_data(conn)?;
+    Ok(())
+}
+
+fn ensure_transaction_detail_fields(conn: &Connection) -> AppResult<()> {
+    for (column, statement) in [
+        (
+            "transaction_account",
+            "ALTER TABLE reconciliation_transaction ADD COLUMN transaction_account TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "transaction_location",
+            "ALTER TABLE reconciliation_transaction ADD COLUMN transaction_location TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "counterparty_account",
+            "ALTER TABLE reconciliation_transaction ADD COLUMN counterparty_account TEXT NOT NULL DEFAULT ''",
+        ),
+        (
+            "accounting_date",
+            "ALTER TABLE reconciliation_transaction ADD COLUMN accounting_date TEXT NOT NULL DEFAULT ''",
+        ),
+    ] {
+        let has_column = conn
+            .prepare(&format!(
+                "SELECT {column} FROM reconciliation_transaction LIMIT 1"
+            ))
+            .is_ok();
+        if !has_column {
+            conn.execute(statement, [])?;
+        }
+    }
     Ok(())
 }
 

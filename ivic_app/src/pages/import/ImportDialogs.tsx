@@ -1,4 +1,4 @@
-import { AlertCircle, FileCheck2, FileText, GripHorizontal, UploadCloud, X } from "lucide-react";
+import { AlertCircle, FileCheck2, FileText, GripHorizontal, Trash2, UploadCloud, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { PointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -550,6 +550,22 @@ export function ImportDialogs({
     setBatchRows((current) => current.filter((row) => row.itemId !== id));
   }
 
+  function removeBatchProblemFiles() {
+    const problemIds = new Set(batchRows.filter((row) => !row.recognizing && batchRowProblem(row)).map((row) => row.itemId));
+    if (!problemIds.size) {
+      return;
+    }
+    markUserTouched();
+    setBatchFiles((current) => {
+      const removed = current.filter((item) => problemIds.has(item.id));
+      revokeItems(removed);
+      return current.filter((item) => !problemIds.has(item.id));
+    });
+    setBatchRows((current) => current.filter((row) => !problemIds.has(row.itemId)));
+    setError("");
+    setOcrMessage(`已删除 ${problemIds.size} 个异常文件，剩余文件可继续导入。`);
+  }
+
   function updateFormDraftDirect(patch: Partial<ImportFormDraft>) {
     markUserTouched();
     if (patch.contentType) {
@@ -636,6 +652,10 @@ export function ImportDialogs({
     if (hasInvoice && !invoiceConfirmed) {
       const fields = invoiceMissingFields.length ? invoiceMissingFields.join("、") : "发票明细";
       setError(`请先确认${fields}。`);
+      return;
+    }
+    if (hasInvoice && invoiceDate && formDraft.purchaseDate && dateAfter(formDraft.purchaseDate, invoiceDate)) {
+      setError(`购买时间不能晚于开票时间（${invoiceDate}）。`);
       return;
     }
     if (!formDraft.purchaseDate && !hasInvoice) {
@@ -811,6 +831,12 @@ export function ImportDialogs({
         <div className={`import-ocr-status ${isRecognizing ? "running" : ""}`}>
           <AlertCircle size={16} />
           <span>{ocrMessage}</span>
+          {tab === "batch" && !isRecognizing && batchProblemCount > 0 && (
+            <button className="import-ocr-action" onClick={removeBatchProblemFiles} type="button">
+              <Trash2 size={13} />
+              删除异常文件
+            </button>
+          )}
         </div>
       )}
 
@@ -1154,6 +1180,12 @@ function FileList({ items, onRemove, problemItemIds }: { items: SelectedFileItem
 
 function normalizeInvoiceNumberKey(value: string) {
   return value.trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function dateAfter(left: string, right: string) {
+  const leftTime = Date.parse(left.replace(/-/g, "/"));
+  const rightTime = Date.parse(right.replace(/-/g, "/"));
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime > rightTime;
 }
 
 function PreviewPane({ file, title, url }: { file: File; title: string; url: string }) {

@@ -7,6 +7,7 @@ import type {
   ExpenseGroup,
   FormRecord,
   InvoiceStatus,
+  OcrIncomeResult,
   OcrInvoiceResult,
   PersonMember,
   ReimbursementBatch,
@@ -240,6 +241,23 @@ export const ivicService = {
       return invoke<OcrInvoiceResult[]>("recognize_invoice_attachments", { items });
     }
     return Promise.all(items.map((item) => this.recognizeInvoiceAttachment(item.fileName, item.bytes)));
+  },
+
+  async recognizeIncomeAttachment(fileName: string, bytes: number[]): Promise<OcrIncomeResult> {
+    if (isTauriRuntime()) {
+      return invoke<OcrIncomeResult>("recognize_income_attachment", { fileName, bytes });
+    }
+    return {
+      ok: false,
+      message: "浏览器预览模式不支持本机 OCR，请在 Tauri 桌面应用中使用。",
+      rawText: "",
+      amount: "",
+      transactionAccount: "",
+      transactionTime: "",
+      transactionLocation: "",
+      counterpartyAccount: "",
+      accountingDate: "",
+    };
   },
 
   async deleteForms(ids: number[]): Promise<AppData> {
@@ -637,6 +655,10 @@ function normalizeLocalData(data: AppData): AppData {
     })),
     transactions: (data.transactions ?? []).map((transaction) => ({
       ...transaction,
+      transactionAccount: transaction.transactionAccount ?? "",
+      transactionLocation: transaction.transactionLocation ?? "",
+      counterpartyAccount: transaction.counterpartyAccount ?? "",
+      accountingDate: transaction.accountingDate ?? "",
       attachmentCount: attachments.filter((attachment) => attachment.ownerType === "transaction" && attachment.ownerId === transaction.id).length,
       matchedBatchIds: transaction.matchedBatchIds ?? [],
       matchedItemIds: transaction.matchedItemIds ?? [],

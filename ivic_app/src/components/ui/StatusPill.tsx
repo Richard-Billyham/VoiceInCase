@@ -1,6 +1,8 @@
+import type { StatusTone } from "../../utils/format";
+
 interface StatusPillProps {
   value: string;
-  tone?: "neutral" | "success" | "warning" | "danger" | "info";
+  tone?: StatusTone;
 }
 
 export function StatusPill({ value, tone = "neutral" }: StatusPillProps) {

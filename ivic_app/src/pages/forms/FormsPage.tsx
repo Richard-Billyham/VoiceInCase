@@ -37,6 +37,7 @@ export function FormsPage({ data, persist }: FormsPageProps) {
   const [keyword, setKeyword] = useState("");
   const [groupId, setGroupId] = useState("全部");
   const [status, setStatus] = useState("全部");
+  const [memberId, setMemberId] = useState("全部");
   const [matchMode, setMatchMode] = useState(false);
   const [multiSelect, setMultiSelect] = useState(false);
   const [importMode, setImportMode] = useState<"single" | "batch" | null>(null);
@@ -52,6 +53,8 @@ export function FormsPage({ data, persist }: FormsPageProps) {
   const hidden = data.settings.hideAmounts;
   const members = data.members ?? [];
   const formRows = useMemo(() => normalizeFormsWorkflow(data), [data]);
+  const groupById = useMemo(() => new Map(data.groups.map((group) => [group.id, group])), [data.groups]);
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
   const filteredRows = useMemo(() => {
     const needle = keyword.trim().toLowerCase();
@@ -59,13 +62,13 @@ export function FormsPage({ data, persist }: FormsPageProps) {
       const keywordHit = !needle || [form.title, form.invoiceNumber, form.groupName, form.remark].join(" ").toLowerCase().includes(needle);
       const groupHit = groupId === "全部" || String(form.groupId) === groupId;
       const statusHit = status === "全部" || form.status === status;
-      return keywordHit && groupHit && statusHit;
+      const memberHit = memberId === "全部" || formMemberMatches(form, Number(memberId), memberById, groupById);
+      return keywordHit && groupHit && statusHit && memberHit;
     });
-  }, [formRows, groupId, keyword, status]);
+  }, [formRows, groupById, groupId, keyword, memberById, memberId, status]);
 
   const selectedRows = filteredRows.filter((row) => selectedIds.includes(row.id));
-  const groupById = useMemo(() => new Map(data.groups.map((group) => [group.id, group])), [data.groups]);
-  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  const selectedAmountTotal = selectedRows.reduce((sum, row) => sum + row.amount, 0);
   const columns: Array<Column<FormRecord>> = [
     { key: "title", header: "名称/摘要", width: "165px", sortable: true, render: (row) => <strong>{row.title}</strong>, sortValue: (row) => row.title },
     { key: "amount", header: "金额", width: "105px", align: "right", sortable: true, render: (row) => formatMoney(row.amount, hidden), sortValue: (row) => row.amount },
@@ -122,6 +125,7 @@ export function FormsPage({ data, persist }: FormsPageProps) {
     setKeyword("");
     setGroupId("全部");
     setStatus("全部");
+    setMemberId("全部");
     setSelectedIds([]);
   }
 
@@ -242,6 +246,13 @@ export function FormsPage({ data, persist }: FormsPageProps) {
                   {invoiceStatusOptions.map((option) => <option key={option}>{option}</option>)}
                 </select>
               </label>
+              <label className="filter-field">
+                <span>人员</span>
+                <select value={memberId} onChange={(event) => setMemberId(event.target.value)}>
+                  <option>全部</option>
+                  {members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
+                </select>
+              </label>
               <Button icon={<RotateCcw size={16} />} onClick={resetFilters}>重置</Button>
             </div>
           </div>
@@ -298,7 +309,13 @@ export function FormsPage({ data, persist }: FormsPageProps) {
             <span>附件 <strong>{selectedRows[0].attachmentCount} 份</strong></span>
           </div>
         ) : (
-          <p>选择单条记录可查看附件、状态和字段详情；多选后可导出、提交或删除。</p>
+          <>
+            <div className="detail-list">
+              <span>选中记录 <strong>{selectedRows.length} 条</strong></span>
+              <span>总金额 <strong>{formatMoney(selectedAmountTotal, hidden)}</strong></span>
+            </div>
+            <p>选择单条记录可查看附件、状态和字段详情；多选后可导出、提交或删除。</p>
+          </>
         )}
       </aside>
 
@@ -475,6 +492,19 @@ function displayMemberName(row: FormRecord, memberById: Map<number, AppData["mem
     return groupById.get(row.groupId)!.ownerName;
   }
   return "";
+}
+
+function formMemberMatches(row: FormRecord, targetMemberId: number, memberById: Map<number, AppData["members"][number]>, groupById: Map<number, AppData["groups"][number]>) {
+  if (row.memberId) {
+    return row.memberId === targetMemberId;
+  }
+  if (row.memberName) {
+    return memberById.get(targetMemberId)?.name === row.memberName;
+  }
+  if (row.groupId && groupById.has(row.groupId)) {
+    return groupById.get(row.groupId)!.ownerId === targetMemberId;
+  }
+  return false;
 }
 
 function MemberTag({ id, name }: { id: number; name: string }) {

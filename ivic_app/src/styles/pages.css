@@ -1,7 +1,4 @@
-﻿  outline: 0;
-}
-
-.toolbar input {
+﻿.toolbar input {
   min-width: 230px;
   flex: 1;
 }
@@ -104,18 +101,75 @@
   display: inline-flex;
   align-items: center;
   min-height: 24px;
-  border: 1px solid var(--color-border-strong);
+  border: 1px solid var(--status-border, var(--color-border-strong));
   border-radius: var(--radius-sm);
-  background: #f4eee5;
+  background: var(--status-bg, #f4eee5);
+  color: var(--status-text, var(--text-main));
   padding: 0 8px;
   font-size: 12px;
   font-weight: 800;
 }
 
-.status-pill.success { background: #e5f0ea; color: var(--success); }
-.status-pill.warning { background: #fff3d8; color: var(--warning); }
-.status-pill.danger { background: #ffe8e2; color: var(--danger); }
-.status-pill.info { background: #e7eff3; color: var(--info); }
+.status-pill.draft {
+  --status-bg: #f5ebe5;
+  --status-border: #d8b9aa;
+  --status-text: #7b4b38;
+}
+
+.status-pill.match {
+  --status-bg: #e4f4f1;
+  --status-border: #91c9c0;
+  --status-text: #24695f;
+}
+
+.status-pill.submit {
+  --status-bg: #fff0cf;
+  --status-border: #e0ad54;
+  --status-text: #8a570f;
+}
+
+.status-pill.queued {
+  --status-bg: #fff7df;
+  --status-border: #e5c979;
+  --status-text: #80651a;
+}
+
+.status-pill.progress,
+.status-pill.info {
+  --status-bg: #e4eef9;
+  --status-border: #93b7dc;
+  --status-text: #2f6190;
+}
+
+.status-pill.partial {
+  --status-bg: #ecf2dc;
+  --status-border: #b7cd7c;
+  --status-text: #5f7215;
+}
+
+.status-pill.success {
+  --status-bg: #e5f2eb;
+  --status-border: #91c2a8;
+  --status-text: var(--success);
+}
+
+.status-pill.warning {
+  --status-bg: #fff0ce;
+  --status-border: #dda75b;
+  --status-text: var(--warning);
+}
+
+.status-pill.cancelled {
+  --status-bg: #f0ece8;
+  --status-border: #c7b7ad;
+  --status-text: #6f625b;
+}
+
+.status-pill.danger {
+  --status-bg: #f5ded9;
+  --status-border: #d99b91;
+  --status-text: var(--danger);
+}
 
 .member-tag {
   display: inline-flex;

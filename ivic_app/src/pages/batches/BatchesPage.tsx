@@ -83,7 +83,7 @@ export function BatchesPage({ data, persist }: BatchesPageProps) {
                     <div key={item.id} className={item.isReleased ? "released" : undefined}>
                       <span>{item.title}</span>
                       <span>{formatMoney(item.amount, hidden)}</span>
-                      <StatusPill value={item.isReleased ? "已退回" : item.status} tone={item.isReleased ? "neutral" : statusTone(item.status)} />
+                      <StatusPill value={item.isReleased ? "已退回" : item.status} tone={statusTone(item.isReleased ? "已退回" : item.status)} />
                     </div>
                   ))}
                 </div>
