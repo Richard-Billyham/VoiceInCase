@@ -1,3 +1,4 @@
 PyMuPDF
 Pillow
-pytesseract
+onnxruntime
+rapidocr

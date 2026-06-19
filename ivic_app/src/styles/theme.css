@@ -174,9 +174,20 @@
 }
 
 [data-theme="night"] .income-editor-error,
+[data-theme="night"] .income-editor-ocr-status.error,
 [data-theme="night"] .submit-error-modal {
   background: #3a2420;
   color: var(--danger);
+}
+
+[data-theme="night"] .income-editor-ocr-status {
+  background: var(--bg-soft);
+  color: var(--text-secondary);
+}
+
+[data-theme="night"] .income-editor-ocr-status.success {
+  background: #20342b;
+  color: var(--success);
 }
 
 [data-theme="night"] .import-ocr-action {
@@ -227,6 +238,7 @@
 }
 
 [data-theme="night"] .income-attachment-zoom,
+[data-theme="night"] .income-attachment-recognizing,
 [data-theme="night"] .income-attachment-card > button {
   background: rgba(33, 29, 25, 0.92);
 }

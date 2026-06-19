@@ -1122,6 +1122,42 @@
   font-weight: 700;
 }
 
+.income-editor-ocr-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  color: var(--text-secondary);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.income-editor-ocr-status svg {
+  flex: 0 0 auto;
+}
+
+.income-editor-ocr-status.running svg,
+.income-attachment-recognizing svg,
+.income-attachment-drop.loading svg {
+  animation: ivic-spin 900ms linear infinite;
+}
+
+.income-editor-ocr-status.success {
+  border-color: rgba(46, 125, 50, 0.32);
+  background: #e5f0ea;
+  color: var(--success);
+}
+
+.income-editor-ocr-status.error {
+  border-color: #81311f;
+  background: #ffe8e2;
+  color: #81311f;
+}
+
 .income-editor-layout {
   display: grid;
   gap: 14px;
@@ -1189,6 +1225,10 @@
   outline: 0;
 }
 
+.income-attachment-drop.loading {
+  cursor: progress;
+}
+
 .income-attachment-drop.dragging,
 .income-attachment-drop:focus-visible {
   border-color: var(--color-action);
@@ -1240,6 +1280,24 @@
   border-radius: var(--radius-sm);
   background: #f8f3ea;
   overflow: hidden;
+}
+
+.income-attachment-recognizing {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(91, 65, 54, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 3px 8px rgba(62, 39, 35, 0.16);
+  color: var(--color-primary-dark);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 900;
 }
 
 .income-attachment-image-viewport {
@@ -1351,6 +1409,12 @@
 .income-attachment-empty span {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+@keyframes ivic-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 

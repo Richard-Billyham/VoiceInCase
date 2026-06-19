@@ -1,8 +1,6 @@
 param(
     [string]$PythonRuntime = "",
-    [string]$TesseractPath = "",
     [switch]$CreateRuntime,
-    [switch]$SkipTesseract,
     [switch]$Clean
 )
 
@@ -68,7 +66,7 @@ if (!(Test-Path (Join-Path $PythonRuntime "Scripts\python.exe"))) {
     throw "Missing OCR Python runtime. Expected Scripts\python.exe under: $PythonRuntime. Use -CreateRuntime to create it."
 }
 $runtimePython = Join-Path $PythonRuntime "Scripts\python.exe"
-Invoke-Checked $runtimePython @("-c", "import fitz, PIL, pytesseract")
+Invoke-Checked $runtimePython @("-c", "import fitz, PIL, rapidocr, onnxruntime")
 
 New-Item -ItemType Directory -Force -Path $runtimeRoot, $serviceRoot | Out-Null
 Get-ChildItem -LiteralPath $serviceRoot -Force | Remove-Item -Recurse -Force
@@ -87,37 +85,5 @@ Copy-Item -LiteralPath $sourceOcrPackage -Destination $packageTarget -Recurse -F
 Copy-Item -LiteralPath $layoutService -Destination (Join-Path $serviceRoot "ivic_invoice_layout.py") -Force
 Get-ChildItem -LiteralPath $serviceRoot -Recurse -Directory -Filter "__pycache__" |
     Remove-Item -Recurse -Force
-
-if (!$SkipTesseract) {
-    $candidates = @()
-    if ($TesseractPath) {
-        $candidates += $TesseractPath
-    }
-    $cmd = Get-Command tesseract.exe -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $candidates += $cmd.Source
-    }
-    $candidates += @(
-        "C:\Program Files\Tesseract-OCR\tesseract.exe",
-        "C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
-    )
-
-    $tesseractExe = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-    if (!$tesseractExe) {
-        throw "Tesseract not found. Install Tesseract OCR with chi_sim, pass -TesseractPath, or use -SkipTesseract for PDF-text-only builds."
-    }
-
-    $tesseractSource = Split-Path -Parent $tesseractExe
-    $tesseractTarget = Join-Path $runtimeRoot "tesseract"
-    if (Test-Path $tesseractTarget) {
-        Remove-Item -LiteralPath $tesseractTarget -Recurse -Force
-    }
-    Copy-Item -LiteralPath $tesseractSource -Destination $tesseractTarget -Recurse -Force
-
-    $chiSim = Join-Path $tesseractTarget "tessdata\chi_sim.traineddata"
-    if (!(Test-Path $chiSim)) {
-        Write-Warning "Bundled Tesseract does not contain tessdata\chi_sim.traineddata. Chinese OCR may fail."
-    }
-}
 
 Write-Host "OCR runtime staged at: $runtimeRoot"

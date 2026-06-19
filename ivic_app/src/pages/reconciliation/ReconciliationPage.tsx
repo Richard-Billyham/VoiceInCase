@@ -1,4 +1,4 @@
-import { CheckCircle2, Edit3, FileCheck2, Image as ImageIcon, Plus, RotateCcw, Save, Scale, UploadCloud, X, XCircle, ZoomIn, ZoomOut } from "lucide-react";
+import { CheckCircle2, Edit3, FileCheck2, Image as ImageIcon, LoaderCircle, Plus, RotateCcw, Save, Scale, UploadCloud, X, XCircle, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { StatusPill } from "../../components/ui/StatusPill";
@@ -27,6 +27,11 @@ interface AttachmentImageDrag {
   startY: number;
   startScrollLeft: number;
   startScrollTop: number;
+}
+
+interface IncomeOcrStatus {
+  state: "idle" | "running" | "success" | "error";
+  message: string;
 }
 
 export function ReconciliationPage({ data, persist }: ReconciliationPageProps) {
@@ -226,6 +231,7 @@ function IncomeEditorDialog({
   const [attachmentFiles, setAttachmentFiles] = useState<SelectedFileItem[]>([]);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [isRecognizingIncome, setIsRecognizingIncome] = useState(false);
+  const [ocrStatus, setOcrStatus] = useState<IncomeOcrStatus>({ state: "idle", message: "" });
   const attachmentFilesRef = useRef<SelectedFileItem[]>([]);
 
   useEffect(() => {
@@ -237,6 +243,7 @@ function IncomeEditorDialog({
   useEffect(() => {
     let cancelled = false;
     setError("");
+    setOcrStatus({ state: "idle", message: "" });
     setDraft({ ...income });
     if (!attachments.length) {
       revokeItems(attachmentFilesRef.current);
@@ -277,6 +284,9 @@ function IncomeEditorDialog({
   }
 
   async function addAttachments(files: File[]) {
+    if (isRecognizingIncome) {
+      return;
+    }
     const images = files.filter((file) => file.type.startsWith("image/") || /\.(png|jpe?g|bmp|gif|webp)$/i.test(file.name));
     if (images.length !== files.length) {
       setError("这里只收到账截图图片，PDF 或其他文件先放一放。");
@@ -294,13 +304,24 @@ function IncomeEditorDialog({
     }
     setIsRecognizingIncome(true);
     setError("");
+    setOcrStatus({ state: "running", message: "正在识别到账截图，首次加载 RapidOCR 模型可能需要几秒。" });
     try {
+      const startedAt = performance.now();
       const bytes = item.bytes ?? Array.from(new Uint8Array(await item.file.arrayBuffer()));
       const result = await ivicService.recognizeIncomeAttachment(item.file.name, bytes);
       if (!result.ok) {
+        setOcrStatus({ state: "error", message: result.message || "到账截图 OCR 识别失败，请手动填写。" });
         setError(result.message || "到账截图 OCR 识别失败，请手动填写。");
         return;
       }
+      const recognizedFields = [
+        result.amount && "金额",
+        result.transactionTime && "时间",
+        result.transactionAccount && "交易账户",
+        result.counterpartyAccount && "对方账户",
+        result.accountingDate && "记账日",
+        result.transactionLocation && "附言",
+      ].filter(Boolean);
       setDraft((current) => ({
         ...current,
         amount: Number(result.amount) || current.amount,
@@ -310,8 +331,17 @@ function IncomeEditorDialog({
         counterpartyAccount: result.counterpartyAccount || current.counterpartyAccount || "",
         accountingDate: result.accountingDate || current.accountingDate || "",
       }));
+      const elapsedSeconds = Math.max(1, Math.round((performance.now() - startedAt) / 1000));
+      setOcrStatus({
+        state: "success",
+        message: recognizedFields.length
+          ? `识别完成，用时约 ${elapsedSeconds} 秒，已回填 ${recognizedFields.join("、")}。`
+          : `识别完成，用时约 ${elapsedSeconds} 秒，但未提取到可回填字段。`,
+      });
     } catch (exception) {
-      setError(exception instanceof Error ? exception.message : "到账截图 OCR 识别失败，请手动填写。");
+      const message = exception instanceof Error ? exception.message : "到账截图 OCR 识别失败，请手动填写。";
+      setOcrStatus({ state: "error", message });
+      setError(message);
     } finally {
       setIsRecognizingIncome(false);
     }
@@ -359,6 +389,14 @@ function IncomeEditorDialog({
         <Button icon={<X size={16} />} onClick={onClose}>关闭</Button>
       </div>
       {error && <p className="income-editor-error">{error}</p>}
+      {ocrStatus.message && (
+        <p aria-live="polite" className={`income-editor-ocr-status ${ocrStatus.state}`}>
+          {ocrStatus.state === "running" && <LoaderCircle size={15} />}
+          {ocrStatus.state === "success" && <CheckCircle2 size={15} />}
+          {ocrStatus.state === "error" && <XCircle size={15} />}
+          <span>{ocrStatus.message}</span>
+        </p>
+      )}
       <div className="income-editor-layout">
         <div className="income-editor-form-side">
           <div className="batch-edit-grid">
@@ -405,16 +443,21 @@ function IncomeEditorDialog({
               <textarea value={draft.remark} onChange={(event) => patch({ remark: event.target.value })} />
             </label>
           </div>
-          <AttachmentDropZone loading={loadingAttachments || isRecognizingIncome} onFiles={addAttachments} />
+          <AttachmentDropZone
+            loading={loadingAttachments || isRecognizingIncome}
+            statusText={isRecognizingIncome ? "正在识别到账截图..." : loadingAttachments ? "正在读取已有截图..." : undefined}
+            onFiles={addAttachments}
+          />
         </div>
         <IncomeAttachmentPanel
           files={attachmentFiles}
+          recognizing={isRecognizingIncome}
           onRemove={removeAttachment}
         />
       </div>
       <div className="modal-actions">
         <Button onClick={onClose}>取消</Button>
-        <Button icon={<Save size={16} />} onClick={submit} variant="primary">保存收入</Button>
+        <Button disabled={isRecognizingIncome} icon={<Save size={16} />} onClick={submit} variant="primary">保存收入</Button>
       </div>
     </section>
   );
@@ -422,9 +465,11 @@ function IncomeEditorDialog({
 
 function IncomeAttachmentPanel({
   files,
+  recognizing,
   onRemove,
 }: {
   files: SelectedFileItem[];
+  recognizing: boolean;
   onRemove: (id: string) => void;
 }) {
   const [zoomById, setZoomById] = useState<Record<string, number>>({});
@@ -503,6 +548,12 @@ function IncomeAttachmentPanel({
               </button>
             )}
             <div className="income-attachment-preview">
+              {recognizing && (
+                <div className="income-attachment-recognizing">
+                  <LoaderCircle size={18} />
+                  <span>正在识别</span>
+                </div>
+              )}
               {item.file.type.startsWith("image/") ? (
                 <>
                   <div
@@ -556,7 +607,7 @@ function clampZoom(value: number) {
   return Math.min(2.5, Math.max(0.7, Number(value.toFixed(2))));
 }
 
-function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (files: File[]) => void | Promise<void> }) {
+function AttachmentDropZone({ loading, statusText, onFiles }: { loading: boolean; statusText?: string; onFiles: (files: File[]) => void | Promise<void> }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -569,8 +620,12 @@ function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (
 
   return (
     <div
-      className={`income-attachment-drop ${dragging ? "dragging" : ""}`}
-      onClick={() => inputRef.current?.click()}
+      className={`income-attachment-drop ${dragging ? "dragging" : ""} ${loading ? "loading" : ""}`}
+      onClick={() => {
+        if (!loading) {
+          inputRef.current?.click();
+        }
+      }}
       onDragLeave={() => setDragging(false)}
       onDragOver={(event) => {
         event.preventDefault();
@@ -584,7 +639,9 @@ function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          inputRef.current?.click();
+          if (!loading) {
+            inputRef.current?.click();
+          }
         }
       }}
       role="button"
@@ -598,9 +655,9 @@ function AttachmentDropZone({ loading, onFiles }: { loading: boolean; onFiles: (
         onChange={(event) => pickFiles(event.currentTarget.files)}
         type="file"
       />
-      <UploadCloud size={22} />
+      {loading ? <LoaderCircle size={22} /> : <UploadCloud size={22} />}
       <strong>添加图片附件</strong>
-      <span>{loading ? "正在读取已有截图..." : "支持截图拖入或点击选择"}</span>
+      <span>{statusText ?? "支持截图拖入或点击选择"}</span>
     </div>
   );
 }

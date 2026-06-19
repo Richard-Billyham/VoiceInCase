@@ -1,31 +1,27 @@
 """OCR and invoice text parsing helpers.
 
-The OCR dependency is optional. If pytesseract/Pillow or the Tesseract
-binary is not installed, callers will receive a clear RuntimeError.
+The OCR dependency is optional. If RapidOCR/ONNX Runtime/Pillow is not
+installed, callers will receive a clear RuntimeError.
 """
 
 import re
+import contextlib
+import io
+import logging
 from pathlib import Path
-from shutil import which
-
-
-COMMON_TESSERACT_PATHS = [
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-]
 
 
 def get_ocr_environment_status():
     """Return OCR/PDF dependency status for diagnostics."""
     status = {
         "pymupdf": _module_available("fitz"),
-        "pytesseract": _module_available("pytesseract"),
         "pillow": _module_available("PIL"),
-        "tesseract": _tesseract_executable_path(),
+        "rapidocr": _module_available("rapidocr"),
+        "onnxruntime": _module_available("onnxruntime"),
     }
     status["pdf_text_available"] = status["pymupdf"]
     status["image_ocr_available"] = bool(
-        status["pytesseract"] and status["pillow"] and status["tesseract"]
+        status["rapidocr"] and status["onnxruntime"] and status["pillow"]
     )
     return status
 
@@ -36,12 +32,12 @@ def format_ocr_environment_status():
     missing = []
     if not status["pymupdf"]:
         missing.append("PyMuPDF（PDF 文本读取）")
-    if not status["pytesseract"]:
-        missing.append("pytesseract（OCR Python 调用）")
     if not status["pillow"]:
         missing.append("Pillow（图片读取）")
-    if not status["tesseract"]:
-        missing.append("Tesseract OCR 程序和中文语言包 chi_sim")
+    if not status["rapidocr"]:
+        missing.append("RapidOCR（图片文字识别）")
+    if not status["onnxruntime"]:
+        missing.append("ONNX Runtime（RapidOCR 推理运行时）")
 
     if not missing:
         return "OCR 环境可用。"
@@ -69,16 +65,6 @@ def _module_available(module_name):
         return True
     except ImportError:
         return False
-
-
-def _tesseract_executable_path():
-    path = which("tesseract")
-    if path:
-        return path
-    for path in COMMON_TESSERACT_PATHS:
-        if Path(path).exists():
-            return path
-    return None
 
 
 def parse_invoice_file(file_path, projects=None):
@@ -134,25 +120,17 @@ def parse_invoice_text(text, projects=None):
 
 def _recognize_image(path):
     try:
-        import pytesseract
-        from PIL import Image
+        from rapidocr import RapidOCR
     except ImportError as exc:
         raise RuntimeError(
-            "缺少 OCR Python 依赖。请执行：pip install pytesseract Pillow"
+            "缺少 RapidOCR 图片识别依赖。请执行：pip install rapidocr onnxruntime Pillow"
         ) from exc
-
-    _configure_tesseract(pytesseract)
 
     try:
-        return pytesseract.image_to_string(Image.open(path), lang="chi_sim+eng")
-    except pytesseract.pytesseract.TesseractNotFoundError as exc:
-        raise RuntimeError(
-            "未找到 Tesseract OCR 程序。请安装 Tesseract OCR，或把 tesseract.exe 加入 PATH。"
-        ) from exc
+        engine = _rapidocr_engine(RapidOCR)
+        return _rapidocr_text(_run_rapidocr(engine, str(path)))
     except Exception as exc:
-        raise RuntimeError(
-            "OCR 识别失败。请确认已安装 Tesseract OCR，并安装中文语言包 chi_sim。"
-        ) from exc
+        raise RuntimeError(f"RapidOCR 图片识别失败：{exc}") from exc
 
 
 def _recognize_pdf(path):
@@ -210,28 +188,23 @@ def _extract_pdf_words(path):
 def _recognize_scanned_pdf(path):
     try:
         import fitz
-        import pytesseract
-        from PIL import Image
+        from rapidocr import RapidOCR
     except ImportError as exc:
         raise RuntimeError(
-            "扫描 PDF 需要 OCR 依赖。请执行：pip install PyMuPDF pytesseract Pillow"
+            "扫描 PDF 需要 OCR 依赖。请执行：pip install PyMuPDF rapidocr onnxruntime Pillow"
         ) from exc
-
-    _configure_tesseract(pytesseract)
 
     text_parts = []
     try:
+        engine = _rapidocr_engine(RapidOCR)
         with fitz.open(path) as document:
             for page in document:
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-                image = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
-                page_text = pytesseract.image_to_string(image, lang="chi_sim+eng").strip()
+                page_text = _rapidocr_text(_run_rapidocr(engine, pixmap.tobytes("png")))
                 if page_text:
                     text_parts.append(page_text)
     except Exception as exc:
-        raise RuntimeError(
-            "扫描 PDF OCR 识别失败。请确认已安装 Tesseract OCR 和中文语言包 chi_sim。"
-        ) from exc
+        raise RuntimeError(f"扫描 PDF RapidOCR 识别失败：{exc}") from exc
 
     text = "\n".join(text_parts).strip()
     if not text:
@@ -239,15 +212,70 @@ def _recognize_scanned_pdf(path):
     return text
 
 
-def _configure_tesseract(pytesseract):
-    current = getattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
-    if current and Path(current).exists():
-        return
+_RAPIDOCR_ENGINE = None
 
-    for path in COMMON_TESSERACT_PATHS:
-        if Path(path).exists():
-            pytesseract.pytesseract.tesseract_cmd = path
-            return
+
+def _rapidocr_engine(engine_class):
+    global _RAPIDOCR_ENGINE
+    if _RAPIDOCR_ENGINE is None:
+        with _silence_rapidocr_output():
+            _RAPIDOCR_ENGINE = engine_class()
+    return _RAPIDOCR_ENGINE
+
+
+def _run_rapidocr(engine, source):
+    with _silence_rapidocr_output():
+        return engine(source)
+
+
+@contextlib.contextmanager
+def _silence_rapidocr_output():
+    previous_disable = logging.root.manager.disable
+    logging.disable(logging.CRITICAL)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        logging.disable(previous_disable)
+
+
+def _rapidocr_text(result):
+    rows = _rapidocr_rows(result)
+    lines = []
+    for row in rows:
+        text = _rapidocr_row_text(row)
+        if text:
+            lines.append(text)
+    return "\n".join(lines).strip()
+
+
+def _rapidocr_rows(result):
+    if result is None:
+        return []
+    if hasattr(result, "txts"):
+        return list(result.txts or [])
+    if isinstance(result, tuple):
+        return result[0] or []
+    if isinstance(result, list):
+        return result
+    return []
+
+
+def _rapidocr_row_text(row):
+    if row is None:
+        return ""
+    if isinstance(row, str):
+        return row.strip()
+    if isinstance(row, dict):
+        return str(row.get("text") or row.get("rec_text") or "").strip()
+    if isinstance(row, (list, tuple)):
+        for item in row:
+            if isinstance(item, str):
+                return item.strip()
+        if len(row) >= 2 and isinstance(row[1], (list, tuple)) and row[1]:
+            return str(row[1][0]).strip()
+    return ""
+
 
 
 def _normalize_text(text):

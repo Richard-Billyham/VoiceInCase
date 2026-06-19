@@ -12,9 +12,9 @@ resources/ocr/
     ivic_ocr/
       service.py
     ivic_invoice_layout.py
-  tesseract/               Optional bundled Tesseract OCR runtime
 ```
 
 The staged runtime is ignored by Git because it can be large. Keep this README
 and the preparation script in source control, then rebuild the installer after
-staging the runtime.
+staging the runtime. Image OCR uses RapidOCR with ONNX Runtime, so the packaged
+app does not require users to install Tesseract OCR.

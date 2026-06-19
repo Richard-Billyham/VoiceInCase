@@ -2,8 +2,10 @@ mod loaders;
 
 use std::{
     fs,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, ChildStdin, Command, Stdio},
+    sync::{Mutex, OnceLock},
 };
 
 #[cfg(target_os = "windows")]
@@ -11,7 +13,7 @@ use std::os::windows::process::CommandExt;
 
 use chrono::Local;
 use rusqlite::{params, OptionalExtension};
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::db;
@@ -617,7 +619,19 @@ pub fn read_attachment_file(
 }
 
 #[tauri::command]
-pub fn recognize_invoice_attachment(
+pub async fn recognize_invoice_attachment(
+    app: AppHandle,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> AppResult<OcrInvoiceResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        recognize_invoice_attachment_sync(app, file_name, bytes)
+    })
+    .await
+    .map_err(|error| AppError::Message(format!("OCR task failed: {error}")))?
+}
+
+fn recognize_invoice_attachment_sync(
     app: AppHandle,
     file_name: String,
     bytes: Vec<u8>,
@@ -632,116 +646,26 @@ pub fn recognize_invoice_attachment(
 
     let runtime = resolve_ocr_runtime(&app)?;
     log_ocr_runtime("invoice", &runtime);
-    let code = r#"
-import json
-import os
-import sys
-from pathlib import Path
-
-service_dir = Path(sys.argv[1])
-file_path = Path(sys.argv[2])
-tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
-if tesseract_path:
-    tesseract = Path(tesseract_path)
-    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
-    tessdata = tesseract.parent / "tessdata"
-    if tessdata.exists():
-        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-sys.path.insert(0, str(service_dir))
-from ivic_ocr.service import format_ocr_environment_status, parse_invoice_file
-try:
-    from ivic_invoice_layout import parse_invoice_layout_file
-except Exception:
-    def parse_invoice_layout_file(_file_path):
-        return {}
-
-def merge_layout_result(data, layout_data):
-    for key, value in (layout_data or {}).items():
-        if value in (None, ""):
-            continue
-        if key in {"buyer_name", "buyer_tax_no", "seller_name", "seller_tax_no", "description"}:
-            data[key] = value
-        elif data.get(key) in (None, ""):
-            data[key] = value
-    return data
-
-try:
-    data = parse_invoice_file(str(file_path))
-    data = merge_layout_result(data, parse_invoice_layout_file(file_path))
-    print(json.dumps({
-        "ok": True,
-        "message": "OCR completed",
-        "rawText": data.get("raw_text") or "",
-        "invoiceNumber": data.get("invoice_number") or "",
-        "invoiceType": data.get("invoice_type") or "",
-        "issueDate": data.get("issue_date") or "",
-        "buyerName": data.get("buyer_name") or "",
-        "buyerTaxNo": data.get("buyer_tax_no") or "",
-        "sellerName": data.get("seller_name") or "",
-        "sellerTaxNo": data.get("seller_tax_no") or "",
-        "itemName": data.get("item_name") or "",
-        "specModel": data.get("spec_model") or "",
-        "unit": data.get("unit") or "",
-        "quantity": "" if data.get("quantity") is None else str(data.get("quantity")),
-        "subtotalAmount": "" if data.get("amount_without_tax") is None else str(data.get("amount_without_tax")),
-        "taxAmount": "" if data.get("tax_amount") is None else str(data.get("tax_amount")),
-        "totalWithTax": "" if data.get("amount") is None else str(data.get("amount")),
-        "invoiceRemark": data.get("description") or "",
-    }, ensure_ascii=True))
-except Exception as exc:
-    print(json.dumps({
-        "ok": False,
-        "message": str(exc) + "\n" + format_ocr_environment_status(),
-        "rawText": "",
-        "invoiceNumber": "",
-        "invoiceType": "",
-        "issueDate": "",
-        "buyerName": "",
-        "buyerTaxNo": "",
-        "sellerName": "",
-        "sellerTaxNo": "",
-        "itemName": "",
-        "specModel": "",
-        "unit": "",
-        "quantity": "",
-        "subtotalAmount": "",
-        "taxAmount": "",
-        "totalWithTax": "",
-        "invoiceRemark": "",
-    }, ensure_ascii=True))
-"#;
-    let tesseract_arg = runtime
-        .tesseract
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let mut command = Command::new(&runtime.python);
-    command
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg("-c")
-        .arg(code)
-        .arg(&runtime.service_dir)
-        .arg(&temp_path)
-        .arg(tesseract_arg);
-    hide_command_window(&mut command);
-    let output = command
-        .output()
-        .map_err(|error| AppError::Message(format!("Failed to start OCR: {error}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stdout.trim().is_empty() {
-        return Err(AppError::Message(format!("OCR 未返回结果。{stderr}")));
-    }
-    let mut result: OcrInvoiceResult = serde_json::from_str(stdout.trim())?;
-    if !stderr.trim().is_empty() && result.message.is_empty() {
-        result.message = stderr.trim().to_string();
-    }
-    Ok(result)
+    ocr_worker_request(
+        &runtime,
+        serde_json::json!({
+            "action": "invoice",
+            "path": temp_path.to_string_lossy(),
+        }),
+    )
 }
 
 #[tauri::command]
-pub fn recognize_invoice_attachments(
+pub async fn recognize_invoice_attachments(
+    app: AppHandle,
+    items: Vec<OcrInvoiceRequest>,
+) -> AppResult<Vec<OcrInvoiceResult>> {
+    tauri::async_runtime::spawn_blocking(move || recognize_invoice_attachments_sync(app, items))
+        .await
+        .map_err(|error| AppError::Message(format!("Batch OCR task failed: {error}")))?
+}
+
+fn recognize_invoice_attachments_sync(
     app: AppHandle,
     items: Vec<OcrInvoiceRequest>,
 ) -> AppResult<Vec<OcrInvoiceResult>> {
@@ -782,45 +706,30 @@ pub fn recognize_invoice_attachments(
 
     let runtime = resolve_ocr_runtime(&app)?;
     log_ocr_runtime("batch invoice", &runtime);
-    let tesseract_arg = runtime
-        .tesseract
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let code = batch_ocr_python_code();
-    let mut command = Command::new(&runtime.python);
-    command
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg("-c")
-        .arg(code)
-        .arg(&runtime.service_dir)
-        .arg(&manifest_path)
-        .arg(tesseract_arg);
-    hide_command_window(&mut command);
-    let output = command
-        .output()
-        .map_err(|error| AppError::Message(format!("Failed to start batch OCR: {error}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stdout.trim().is_empty() {
-        return Err(AppError::Message(format!(
-            "Batch OCR returned no result. {stderr}"
-        )));
-    }
-    let mut results: Vec<OcrInvoiceResult> = serde_json::from_str(stdout.trim())?;
-    if !stderr.trim().is_empty() {
-        for result in &mut results {
-            if result.message.is_empty() {
-                result.message = stderr.trim().to_string();
-            }
-        }
-    }
-    Ok(results)
+    ocr_worker_request(
+        &runtime,
+        serde_json::json!({
+            "action": "batch_invoice",
+            "manifestPath": manifest_path.to_string_lossy(),
+            "items": manifest_items,
+        }),
+    )
 }
 
 #[tauri::command]
-pub fn recognize_income_attachment(
+pub async fn recognize_income_attachment(
+    app: AppHandle,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> AppResult<OcrIncomeResult> {
+    tauri::async_runtime::spawn_blocking(move || {
+        recognize_income_attachment_sync(app, file_name, bytes)
+    })
+    .await
+    .map_err(|error| AppError::Message(format!("Income OCR task failed: {error}")))?
+}
+
+fn recognize_income_attachment_sync(
     app: AppHandle,
     file_name: String,
     bytes: Vec<u8>,
@@ -835,256 +744,13 @@ pub fn recognize_income_attachment(
 
     let runtime = resolve_ocr_runtime(&app)?;
     log_ocr_runtime("income", &runtime);
-    let tesseract_arg = runtime
-        .tesseract
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let mut command = Command::new(&runtime.python);
-    command
-        .env("PYTHONUTF8", "1")
-        .env("PYTHONIOENCODING", "utf-8")
-        .arg("-c")
-        .arg(income_ocr_python_code())
-        .arg(&runtime.service_dir)
-        .arg(&temp_path)
-        .arg(tesseract_arg);
-    hide_command_window(&mut command);
-    let output = command
-        .output()
-        .map_err(|error| AppError::Message(format!("Failed to start income OCR: {error}")))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if stdout.trim().is_empty() {
-        return Err(AppError::Message(format!(
-            "Income OCR returned no result. {stderr}"
-        )));
-    }
-    let mut result: OcrIncomeResult = serde_json::from_str(stdout.trim())?;
-    if !stderr.trim().is_empty() && result.message.is_empty() {
-        result.message = stderr.trim().to_string();
-    }
-    Ok(result)
-}
-
-fn batch_ocr_python_code() -> &'static str {
-    r#"
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
-service_dir = Path(sys.argv[1])
-manifest_path = Path(sys.argv[2])
-tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
-if tesseract_path:
-    tesseract = Path(tesseract_path)
-    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
-    tessdata = tesseract.parent / "tessdata"
-    if tessdata.exists():
-        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-
-if os.name == "nt":
-    _ivic_original_popen = subprocess.Popen
-
-    def _ivic_hidden_popen(*args, **kwargs):
-        startupinfo = kwargs.get("startupinfo") or subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0
-        kwargs["startupinfo"] = startupinfo
-        kwargs["creationflags"] = kwargs.get("creationflags", 0) | 0x08000000
-        return _ivic_original_popen(*args, **kwargs)
-
-    subprocess.Popen = _ivic_hidden_popen
-
-sys.path.insert(0, str(service_dir))
-from ivic_ocr.service import format_ocr_environment_status, parse_invoice_file
-try:
-    from ivic_invoice_layout import parse_invoice_layout_file
-except Exception:
-    def parse_invoice_layout_file(_file_path):
-        return {}
-
-def merge_layout_result(data, layout_data):
-    for key, value in (layout_data or {}).items():
-        if value in (None, ""):
-            continue
-        if key in {"buyer_name", "buyer_tax_no", "seller_name", "seller_tax_no", "description"}:
-            data[key] = value
-        elif data.get(key) in (None, ""):
-            data[key] = value
-    return data
-
-def empty_result(message):
-    return {
-        "ok": False,
-        "message": message,
-        "rawText": "",
-        "invoiceNumber": "",
-        "invoiceType": "",
-        "issueDate": "",
-        "buyerName": "",
-        "buyerTaxNo": "",
-        "sellerName": "",
-        "sellerTaxNo": "",
-        "itemName": "",
-        "specModel": "",
-        "unit": "",
-        "quantity": "",
-        "subtotalAmount": "",
-        "taxAmount": "",
-        "totalWithTax": "",
-        "invoiceRemark": "",
-    }
-
-def parse_one(file_path):
-    try:
-        data = parse_invoice_file(str(file_path))
-        data = merge_layout_result(data, parse_invoice_layout_file(file_path))
-        return {
-            "ok": True,
-            "message": "OCR completed",
-            "rawText": data.get("raw_text") or "",
-            "invoiceNumber": data.get("invoice_number") or "",
-            "invoiceType": data.get("invoice_type") or "",
-            "issueDate": data.get("issue_date") or "",
-            "buyerName": data.get("buyer_name") or "",
-            "buyerTaxNo": data.get("buyer_tax_no") or "",
-            "sellerName": data.get("seller_name") or "",
-            "sellerTaxNo": data.get("seller_tax_no") or "",
-            "itemName": data.get("item_name") or "",
-            "specModel": data.get("spec_model") or "",
-            "unit": data.get("unit") or "",
-            "quantity": "" if data.get("quantity") is None else str(data.get("quantity")),
-            "subtotalAmount": "" if data.get("amount_without_tax") is None else str(data.get("amount_without_tax")),
-            "taxAmount": "" if data.get("tax_amount") is None else str(data.get("tax_amount")),
-            "totalWithTax": "" if data.get("amount") is None else str(data.get("amount")),
-            "invoiceRemark": data.get("description") or "",
-        }
-    except Exception as exc:
-        return empty_result(str(exc) + "\n" + format_ocr_environment_status())
-
-items = json.loads(manifest_path.read_text(encoding="utf-8"))
-results = [parse_one(Path(item["path"])) for item in items]
-print(json.dumps(results, ensure_ascii=True))
-"#
-}
-
-fn income_ocr_python_code() -> &'static str {
-    r#"
-import json
-import os
-import re
-import subprocess
-import sys
-from pathlib import Path
-
-service_dir = Path(sys.argv[1])
-file_path = Path(sys.argv[2])
-tesseract_path = sys.argv[3] if len(sys.argv) > 3 else ""
-if tesseract_path:
-    tesseract = Path(tesseract_path)
-    os.environ["PATH"] = str(tesseract.parent) + os.pathsep + os.environ.get("PATH", "")
-    tessdata = tesseract.parent / "tessdata"
-    if tessdata.exists():
-        os.environ.setdefault("TESSDATA_PREFIX", str(tessdata))
-
-if os.name == "nt":
-    _ivic_original_popen = subprocess.Popen
-
-    def _ivic_hidden_popen(*args, **kwargs):
-        startupinfo = kwargs.get("startupinfo") or subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0
-        kwargs["startupinfo"] = startupinfo
-        kwargs["creationflags"] = kwargs.get("creationflags", 0) | 0x08000000
-        return _ivic_original_popen(*args, **kwargs)
-
-    subprocess.Popen = _ivic_hidden_popen
-
-sys.path.insert(0, str(service_dir))
-from ivic_ocr.service import format_ocr_environment_status, recognize_invoice_file
-
-def empty_result(message):
-    return {
-        "ok": False,
-        "message": message,
-        "rawText": "",
-        "amount": "",
-        "transactionAccount": "",
-        "transactionTime": "",
-        "transactionLocation": "",
-        "counterpartyAccount": "",
-        "accountingDate": "",
-    }
-
-def normalize_text(text):
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-    return text.strip()
-
-def compact_lines(text):
-    return [line.strip() for line in text.splitlines() if line.strip()]
-
-def clean_value(value):
-    return re.sub(r"\s+", " ", value or "").strip(" :：")
-
-def extract_after_label(lines, label, stop_labels):
-    for index, line in enumerate(lines):
-        if label not in line:
-            continue
-        value = line.split(label, 1)[1].strip(" :：")
-        collected = [value] if value else []
-        for next_line in lines[index + 1:]:
-            if any(stop in next_line for stop in stop_labels):
-                break
-            if next_line:
-                collected.append(next_line)
-            if len(collected) >= 4:
-                break
-        return clean_value(" ".join(collected))
-    return ""
-
-def strip_balance_section(text):
-    return re.split(r"账户余额|余额", text, maxsplit=1)[0]
-
-def parse_amount(text):
-    safe_text = strip_balance_section(text)
-    matches = re.findall(r"(?:¥|￥|CNY|RMB)?\s*([+-]?\d[\d,]*\.\d{2})", safe_text)
-    if not matches:
-        return ""
-    values = []
-    for match in matches:
-        try:
-            values.append(abs(float(match.replace(",", ""))))
-        except ValueError:
-            pass
-    return f"{max(values):.2f}" if values else ""
-
-def parse_income(text):
-    normalized = normalize_text(text)
-    lines = compact_lines(normalized)
-    stop_labels = ["交易账户", "交易时间", "交易地点/附言", "对方账户", "记账日", "账户余额", "备注"]
-    return {
-        "ok": True,
-        "message": "Income OCR completed",
-        "rawText": strip_balance_section(normalized).strip(),
-        "amount": parse_amount(normalized),
-        "transactionAccount": extract_after_label(lines, "交易账户", stop_labels),
-        "transactionTime": extract_after_label(lines, "交易时间", stop_labels),
-        "transactionLocation": extract_after_label(lines, "交易地点/附言", stop_labels),
-        "counterpartyAccount": extract_after_label(lines, "对方账户", stop_labels),
-        "accountingDate": extract_after_label(lines, "记账日", stop_labels),
-    }
-
-try:
-    text = recognize_invoice_file(str(file_path))
-    print(json.dumps(parse_income(text), ensure_ascii=True))
-except Exception as exc:
-    print(json.dumps(empty_result(str(exc) + "\n" + format_ocr_environment_status()), ensure_ascii=True))
-"#
+    ocr_worker_request(
+        &runtime,
+        serde_json::json!({
+            "action": "income",
+            "path": temp_path.to_string_lossy(),
+        }),
+    )
 }
 
 #[tauri::command]
@@ -1185,7 +851,139 @@ pub fn delete_batch(app: AppHandle, id: i64) -> AppResult<AppData> {
 struct OcrRuntime {
     python: PathBuf,
     service_dir: PathBuf,
-    tesseract: Option<PathBuf>,
+}
+
+struct OcrWorker {
+    key: String,
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
+}
+
+static OCR_WORKER: OnceLock<Mutex<Option<OcrWorker>>> = OnceLock::new();
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OcrWorkerEnvelope<T> {
+    ok: bool,
+    result: Option<T>,
+    message: Option<String>,
+}
+
+fn ocr_worker_request<T: DeserializeOwned>(
+    runtime: &OcrRuntime,
+    request: serde_json::Value,
+) -> AppResult<T> {
+    let worker_lock = OCR_WORKER.get_or_init(|| Mutex::new(None));
+    let mut worker_slot = worker_lock
+        .lock()
+        .map_err(|_| AppError::Message("OCR worker lock was poisoned".to_string()))?;
+    let worker = ensure_ocr_worker(&mut worker_slot, runtime)?;
+    match ocr_worker_request_once(worker, &request) {
+        Ok(result) => Ok(result),
+        Err(first_error) => {
+            *worker_slot = None;
+            let worker = ensure_ocr_worker(&mut worker_slot, runtime)?;
+            ocr_worker_request_once(worker, &request).map_err(|second_error| {
+                AppError::Message(format!(
+                    "OCR worker failed after restart: {second_error}; previous error: {first_error}"
+                ))
+            })
+        }
+    }
+}
+
+fn ensure_ocr_worker<'a>(
+    worker_slot: &'a mut Option<OcrWorker>,
+    runtime: &OcrRuntime,
+) -> AppResult<&'a mut OcrWorker> {
+    let key = ocr_worker_key(runtime);
+    let restart = match worker_slot {
+        Some(worker) if worker.key == key => worker.child.try_wait()?.is_some(),
+        Some(_) => true,
+        None => true,
+    };
+    if restart {
+        *worker_slot = Some(start_ocr_worker(runtime)?);
+    }
+    worker_slot
+        .as_mut()
+        .ok_or_else(|| AppError::Message("OCR worker was not available".to_string()))
+}
+
+fn start_ocr_worker(runtime: &OcrRuntime) -> AppResult<OcrWorker> {
+    let worker_script = runtime.service_dir.join("ivic_ocr").join("worker.py");
+    if !worker_script.exists() {
+        return Err(AppError::Message(format!(
+            "OCR worker script was not found: {}",
+            worker_script.display()
+        )));
+    }
+    let mut command = Command::new(&runtime.python);
+    command
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .arg(&worker_script)
+        .arg(&runtime.service_dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_command_window(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| AppError::Message(format!("Failed to start OCR worker: {error}")))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::Message("Failed to open OCR worker stdin".to_string()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::Message("Failed to open OCR worker stdout".to_string()))?;
+    Ok(OcrWorker {
+        key: ocr_worker_key(runtime),
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+    })
+}
+
+fn ocr_worker_request_once<T: DeserializeOwned>(
+    worker: &mut OcrWorker,
+    request: &serde_json::Value,
+) -> AppResult<T> {
+    let request_line = serde_json::to_string(request)?;
+    worker.stdin.write_all(request_line.as_bytes())?;
+    worker.stdin.write_all(b"\n")?;
+    worker.stdin.flush()?;
+
+    let mut response_line = String::new();
+    let read = worker.stdout.read_line(&mut response_line)?;
+    if read == 0 {
+        return Err(AppError::Message(
+            "OCR worker exited unexpectedly".to_string(),
+        ));
+    }
+    let envelope: OcrWorkerEnvelope<T> = serde_json::from_str(response_line.trim())?;
+    if envelope.ok {
+        envelope
+            .result
+            .ok_or_else(|| AppError::Message("OCR worker returned no result".to_string()))
+    } else {
+        Err(AppError::Message(
+            envelope
+                .message
+                .unwrap_or_else(|| "OCR worker failed".to_string()),
+        ))
+    }
+}
+
+fn ocr_worker_key(runtime: &OcrRuntime) -> String {
+    format!(
+        "{}|{}",
+        runtime.python.display(),
+        runtime.service_dir.display()
+    )
 }
 
 fn resolve_ocr_runtime(app: &AppHandle) -> AppResult<OcrRuntime> {
@@ -1221,7 +1019,6 @@ fn bundled_ocr_runtime(app: &AppHandle) -> Option<OcrRuntime> {
     Some(OcrRuntime {
         python,
         service_dir,
-        tesseract: bundled_tesseract_executable(&ocr_root),
     })
 }
 
@@ -1234,24 +1031,11 @@ fn bundled_python_executable(ocr_root: &Path) -> Option<PathBuf> {
     .find(|path| path.exists())
 }
 
-fn bundled_tesseract_executable(ocr_root: &Path) -> Option<PathBuf> {
-    [
-        ocr_root.join("tesseract").join("tesseract.exe"),
-        ocr_root
-            .join("tesseract")
-            .join("Tesseract-OCR")
-            .join("tesseract.exe"),
-    ]
-    .into_iter()
-    .find(|path| path.exists())
-}
-
 fn development_ocr_runtime() -> Option<OcrRuntime> {
     let workspace = workspace_root()?;
     Some(OcrRuntime {
         python: python_executable(&workspace),
         service_dir: workspace.join("ivic_app").join("src-tauri").join("python"),
-        tesseract: None,
     })
 }
 
@@ -1292,14 +1076,9 @@ fn python_executable(workspace: &Path) -> PathBuf {
 fn log_ocr_runtime(label: &str, runtime: &OcrRuntime) {
     #[cfg(debug_assertions)]
     eprintln!(
-        "[ivic] {label} OCR runtime: python={}, service_dir={}, tesseract={}",
+        "[ivic] {label} OCR runtime: python={}, service_dir={}",
         runtime.python.display(),
-        runtime.service_dir.display(),
-        runtime
-            .tesseract
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "<PATH/default>".to_string())
+        runtime.service_dir.display()
     );
 }
 

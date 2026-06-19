@@ -54,11 +54,10 @@ npm run tauri build
 ```
 
 The script creates or reuses `.ocr-runtime`, installs `ocr_requirements.txt`,
-copies `src-tauri/python/ivic_ocr`, `ivic_invoice_layout.py`, and a local
-Tesseract installation into `src-tauri/resources/ocr/`. That staged runtime is
-ignored by Git but included by Tauri as installer resources. If Tesseract is
-not installed locally, install it with the `chi_sim` language data or pass
-`-TesseractPath`.
+and copies `src-tauri/python/ivic_ocr` plus `ivic_invoice_layout.py` into
+`src-tauri/resources/ocr/`. Image OCR uses RapidOCR with ONNX Runtime, so the
+packaged app does not require users to install Tesseract OCR. That staged
+runtime is ignored by Git but included by Tauri as installer resources.
 
 ## Product Baseline
 
